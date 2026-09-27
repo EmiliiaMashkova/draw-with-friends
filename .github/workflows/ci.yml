@@ -18,7 +18,7 @@ jobs:
       - run: npm test
 
   deploy:
-    name: deploy to mctl drawing/draw-with-friends
+    name: deploy to mctl karabu/draw-with-friends
     needs: [check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{
               "action": "deploy",
-              "team_name": "drawing",
+              "team_name": "karabu",
               "component_name": "draw-with-friends",
               "dockerfile_repo": "EmiliiaMashkova/draw-with-friends",
               "git_tag": "${{ steps.tag.outputs.tag }}"

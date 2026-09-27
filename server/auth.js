@@ -16,9 +16,34 @@ function authRouter(store) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const devLogin = process.env.DEV_LOGIN === 'true';
+  const inviteCode = process.env.INVITE_CODE || '';
 
   router.get('/auth/config', (req, res) => {
-    res.json({ google: Boolean(clientId && clientSecret), dev: devLogin });
+    res.json({ google: Boolean(clientId && clientSecret), invite: Boolean(inviteCode), dev: devLogin });
+  });
+
+  // Вход по коду приглашения: код знают только друзья, аккаунт живёт в cookie этого браузера.
+  const attempts = new Map(); // ip -> {n, until}
+  router.post('/auth/invite', express.json(), async (req, res) => {
+    if (!inviteCode) return res.status(404).json({ error: 'Вход по коду выключен.' });
+    const now = Date.now();
+    const a = attempts.get(req.ip) || { n: 0, until: 0 };
+    if (a.until > now) return res.status(429).json({ error: 'Слишком много попыток, подождите минуту.' });
+    const given = Buffer.from(String(req.body.code || '').trim().toLowerCase());
+    const expected = Buffer.from(inviteCode.trim().toLowerCase());
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+      a.n += 1;
+      if (a.n >= 5) { a.n = 0; a.until = now + 60_000; }
+      attempts.set(req.ip, a);
+      return res.status(403).json({ error: 'Неверный код.' });
+    }
+    attempts.delete(req.ip);
+    if (req.session.uid && (await store.getUser(req.session.uid))) return res.json({ ok: true });
+    const user = await store.upsertGoogleUser({
+      id: `invite:${crypto.randomUUID()}`, email: null, googleName: null, googlePicture: null,
+    });
+    req.session.uid = user.id;
+    res.json({ ok: true });
   });
 
   router.get('/auth/google', (req, res) => {

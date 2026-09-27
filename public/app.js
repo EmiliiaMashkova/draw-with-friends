@@ -78,8 +78,23 @@ async function renderLogin() {
     err ? h('p', { class: 'error' }, 'Не получилось войти, попробуйте ещё раз.') : null,
     cfg.google
       ? h('a', { href: '/auth/google' }, h('button', { class: 'google-btn primary' }, 'Войти через Google'))
-      : h('p', { class: 'error' }, 'Вход через Google ещё не настроен.'),
+      : null,
   );
+  if (cfg.invite) {
+    const code = h('input', { type: 'text', placeholder: 'Код приглашения', autocomplete: 'off' });
+    const msg = h('p', { class: 'error' });
+    const enter = async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      const r = await fetch('/auth/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code.value }) });
+      if (r.ok) { location.href = '/'; return; }
+      msg.textContent = (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
+    };
+    box.append(h('form', { onsubmit: enter, style: 'margin-top:16px' },
+      h('p', {}, cfg.google ? 'Или войдите по коду приглашения:' : 'Введите код приглашения от друзей:'),
+      h('div', { class: 'row', style: 'justify-content:center' }, code, h('button', { class: cfg.google ? '' : 'primary', type: 'submit' }, 'Войти')),
+      msg));
+  }
   if (cfg.dev) {
     const input = h('input', { type: 'text', placeholder: 'Имя для теста', value: 'Тест' });
     box.append(h('div', { class: 'row', style: 'justify-content:center;margin-top:16px' }, input,
