@@ -11,6 +11,24 @@ function baseUrl(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 
+// Личный ключ входа: «слово-слово-число», чтобы вернуться в свой профиль с любого устройства.
+const KEY_WORDS = [
+  'лиса', 'кот', 'панда', 'сова', 'ёжик', 'кит', 'енот', 'пчела', 'жираф', 'заяц', 'волк', 'тигр', 'коала', 'пингвин',
+  'дельфин', 'белка', 'олень', 'бобр', 'лама', 'выдра', 'облако', 'радуга', 'звезда', 'луна', 'солнце', 'ракета',
+  'комета', 'гора', 'река', 'море', 'ветер', 'снег', 'дождь', 'цветок', 'клён', 'кактус', 'гриб', 'ягода', 'арбуз',
+  'пончик', 'вафля', 'кекс', 'карандаш', 'кисть', 'краска', 'мелок', 'зефир', 'фонарь', 'замок', 'маяк',
+];
+function newLoginKey() {
+  const w = () => KEY_WORDS[crypto.randomInt(KEY_WORDS.length)];
+  return `${w()}-${w()}-${crypto.randomInt(100, 1000)}`;
+}
+function normalizeKey(key) {
+  return String(key || '').trim().toLowerCase().replace(/ё/g, 'е').replace(/[\s_]+/g, '-');
+}
+function hashKey(key) {
+  return crypto.createHash('sha256').update(normalizeKey(key)).digest('hex');
+}
+
 function authRouter(store) {
   const router = express.Router();
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -22,19 +40,33 @@ function authRouter(store) {
     res.json({ google: Boolean(clientId && clientSecret), invite: Boolean(inviteCode), dev: devLogin });
   });
 
-  // Вход по коду приглашения: код знают только друзья, аккаунт живёт в cookie этого браузера.
+  // Вход по коду приглашения: код знают только друзья; вернуться в свой профиль можно личным ключом.
   const attempts = new Map(); // ip -> {n, until}
+  const throttled = (req) => (attempts.get(req.ip)?.until || 0) > Date.now();
+  const failed = (req) => {
+    const a = attempts.get(req.ip) || { n: 0, until: 0 };
+    a.n += 1;
+    if (a.n >= 5) { a.n = 0; a.until = Date.now() + 60_000; }
+    attempts.set(req.ip, a);
+  };
+  const TOO_MANY = { error: 'Слишком много попыток, подождите минуту.' };
+
+  router.post('/auth/key', express.json(), async (req, res) => {
+    if (throttled(req)) return res.status(429).json(TOO_MANY);
+    const user = normalizeKey(req.body.key).length >= 5 ? await store.findUserByKeyHash(hashKey(req.body.key)) : null;
+    if (!user) { failed(req); return res.status(403).json({ error: 'Такой ключ не найден.' }); }
+    attempts.delete(req.ip);
+    req.session.uid = user.id;
+    res.json({ ok: true });
+  });
+
   router.post('/auth/invite', express.json(), async (req, res) => {
     if (!inviteCode) return res.status(404).json({ error: 'Вход по коду выключен.' });
-    const now = Date.now();
-    const a = attempts.get(req.ip) || { n: 0, until: 0 };
-    if (a.until > now) return res.status(429).json({ error: 'Слишком много попыток, подождите минуту.' });
+    if (throttled(req)) return res.status(429).json(TOO_MANY);
     const given = Buffer.from(String(req.body.code || '').trim().toLowerCase());
     const expected = Buffer.from(inviteCode.trim().toLowerCase());
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
-      a.n += 1;
-      if (a.n >= 5) { a.n = 0; a.until = now + 60_000; }
-      attempts.set(req.ip, a);
+      failed(req);
       return res.status(403).json({ error: 'Неверный код.' });
     }
     attempts.delete(req.ip);
@@ -115,4 +147,4 @@ function authRouter(store) {
   return router;
 }
 
-module.exports = { authRouter };
+module.exports = { authRouter, newLoginKey, hashKey, normalizeKey };

@@ -30,6 +30,8 @@ class MemoryStore {
     return user;
   }
   async getUser(id) { return this.users.get(id) || null; }
+  async setLoginKeyHash(id, hash) { const u = this.users.get(id); if (u) u.loginKeyHash = hash; }
+  async findUserByKeyHash(hash) { return [...this.users.values()].find((u) => u.loginKeyHash === hash) || null; }
   async updateProfile(id, { nickname, avatar }) {
     const u = this.users.get(id);
     if (!u) return null;
@@ -86,6 +88,7 @@ class PgStore {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       CREATE INDEX IF NOT EXISTS strokes_canvas_idx ON strokes (canvas_id, id);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS login_key_hash TEXT UNIQUE;
     `);
     const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM canvases');
     if (rows[0].n === 0) {
@@ -97,7 +100,7 @@ class PgStore {
   static rowToUser(r) {
     return r && {
       id: r.id, email: r.email, googleName: r.google_name, googlePicture: r.google_picture,
-      nickname: r.nickname, avatar: r.avatar,
+      nickname: r.nickname, avatar: r.avatar, loginKeyHash: r.login_key_hash,
     };
   }
   async upsertGoogleUser(u) {
@@ -111,6 +114,13 @@ class PgStore {
   }
   async getUser(id) {
     const { rows } = await this.pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    return PgStore.rowToUser(rows[0]) || null;
+  }
+  async setLoginKeyHash(id, hash) {
+    await this.pool.query('UPDATE users SET login_key_hash = $2 WHERE id = $1', [id, hash]);
+  }
+  async findUserByKeyHash(hash) {
+    const { rows } = await this.pool.query('SELECT * FROM users WHERE login_key_hash = $1', [hash]);
     return PgStore.rowToUser(rows[0]) || null;
   }
   async updateProfile(id, { nickname, avatar }) {

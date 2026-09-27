@@ -91,9 +91,22 @@ async function renderLogin() {
       msg.textContent = (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
     };
     box.append(h('form', { onsubmit: enter, style: 'margin-top:16px' },
-      h('p', {}, cfg.google ? 'Или войдите по коду приглашения:' : 'Введите код приглашения от друзей:'),
+      h('p', {}, cfg.google ? 'Или войдите по коду приглашения:' : 'Первый раз? Введите код приглашения от друзей:'),
       h('div', { class: 'row', style: 'justify-content:center' }, code, h('button', { class: cfg.google ? '' : 'primary', type: 'submit' }, 'Войти')),
       msg));
+    const key = h('input', { type: 'text', placeholder: 'лиса-облако-123', autocomplete: 'off' });
+    const keyMsg = h('p', { class: 'error' });
+    const enterKey = async (e) => {
+      e.preventDefault();
+      keyMsg.textContent = '';
+      const r = await fetch('/auth/key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: key.value }) });
+      if (r.ok) { location.href = '/'; return; }
+      keyMsg.textContent = (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
+    };
+    box.append(h('form', { onsubmit: enterKey, style: 'margin-top:16px' },
+      h('p', {}, 'Уже рисовали здесь? Войдите своим личным ключом:'),
+      h('div', { class: 'row', style: 'justify-content:center' }, key, h('button', { type: 'submit' }, 'Войти')),
+      keyMsg));
   }
   if (cfg.dev) {
     const input = h('input', { type: 'text', placeholder: 'Имя для теста', value: 'Тест' });
@@ -143,6 +156,28 @@ function renderProfile() {
     updatePreview();
   } });
 
+  // Личный ключ входа: нужен, чтобы вернуться в этот профиль с другого устройства или после выхода.
+  const keyBox = h('div', { class: 'keybox' });
+  const showKey = (key) => keyBox.replaceChildren(
+    h('label', {}, 'Ваш личный ключ входа'),
+    h('div', { class: 'row' }, h('code', { class: 'key' }, key),
+      h('button', { type: 'button', onclick: () => navigator.clipboard?.writeText(key).then(() => toast('Ключ скопирован')) }, 'Копировать')),
+    h('p', { class: 'muted' }, 'Запишите его! По этому ключу можно вернуться в свой профиль с любого устройства. Никому его не показывайте.'));
+  const newKey = async () => {
+    const { key } = await api('/api/me/login-key', { method: 'POST' });
+    me.hasLoginKey = true;
+    showKey(key);
+  };
+  if (me.id.startsWith('invite:')) {
+    if (me.hasLoginKey) {
+      keyBox.replaceChildren(h('label', {}, 'Личный ключ входа'),
+        h('p', { class: 'muted' }, 'Ключ уже есть. Если вы его потеряли, получите новый: старый перестанет работать.'),
+        h('button', { type: 'button', onclick: () => { if (confirm('Старый ключ перестанет работать. Получить новый?')) newKey(); } }, 'Получить новый ключ'));
+    } else {
+      newKey();
+    }
+  }
+
   const save = async (e) => {
     e.preventDefault();
     err.textContent = '';
@@ -166,6 +201,7 @@ function renderProfile() {
       h('button', { type: 'button', onclick: () => file.click() }, 'Загрузить картинку'), file),
     h('p', { class: 'muted' }, 'Или соберите свой: выберите значок и цвет фона.'),
     emojiGrid, h('div', { style: 'height:10px' }), swatches,
+    me.id.startsWith('invite:') ? keyBox : null,
     err,
     h('div', { class: 'row', style: 'margin-top:20px' }, h('button', { class: 'primary', type: 'submit' }, 'Сохранить'),
       me.needsProfile ? null : h('a', { href: '#/' }, h('button', { type: 'button' }, 'Отмена')))));

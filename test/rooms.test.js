@@ -23,3 +23,10 @@ test('у каждого урока есть шаги с подсказкой и 
     for (const s of l.steps) assert.ok(s.hint && s.path.startsWith('M'));
   }
 });
+
+test('личный ключ: нормализация и хеш не зависят от регистра, ё и пробелов', () => {
+  const { newLoginKey, hashKey } = require('../server/auth');
+  const key = newLoginKey();
+  assert.match(key, /^[а-яё]+-[а-яё]+-\d{3}$/);
+  assert.strictEqual(hashKey('Ёжик-Кот-123'), hashKey(' ежик кот 123 '));
+});
