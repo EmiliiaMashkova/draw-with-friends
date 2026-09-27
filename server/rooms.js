@@ -3,6 +3,7 @@ const { LESSONS } = require('./lessons');
 
 const TURN_SECONDS = Number(process.env.TURN_SECONDS || 45);
 const LAPS = 2; // сколько раз каждый игрок рисует за игру
+// Порядок важен: клиент переводит тему по индексу promptId (public/i18n.js).
 const PROMPTS = [
   'Подводный мир', 'Город будущего', 'Пикник в парке', 'Космическое путешествие', 'Сказочный лес',
   'Зоопарк', 'Зимний вечер', 'Пиратский корабль', 'Кафе на углу', 'Ферма', 'Замок дракона',
@@ -102,7 +103,8 @@ function setupRooms(io, store) {
     st.players = players;
     st.order = Array.from({ length: LAPS }, () => shuffled).flat();
     st.turn = 0;
-    st.prompt = PROMPTS[Math.floor(Math.random() * PROMPTS.length)];
+    st.promptId = Math.floor(Math.random() * PROMPTS.length);
+    st.prompt = PROMPTS[st.promptId];
     st.status = 'playing';
     await store.clearStrokes(canvasId);
     io.to(room(canvasId)).emit('canvas:cleared');

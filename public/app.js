@@ -1,13 +1,11 @@
 import { Board } from './board.js';
+import { LANGS, lang, setLang, applyDocumentLang, t, tErr, tCanvas, tPrompt, tText } from './i18n.js';
 
 const app = document.getElementById('app');
 const meBox = document.getElementById('me');
 const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter((k) => k != null && k !== false));
-const TYPE_INFO = {
-  free: { label: 'Свободное', text: 'Рисуйте все вместе в любой момент.' },
-  rounds: { label: 'По раундам', text: 'Игроки рисуют по очереди на общую тему, у каждого свой ход.' },
-  assisted: { label: 'С помощником', text: 'Пошаговые уроки: обводите подсказки вместе, как в ArtLoop.' },
-};
+const typeLabel = (type) => t(`type.${type}.label`);
+const typeText = (type) => t(`type.${type}.text`);
 const EMOJIS = ['🐱', '🐶', '🦊', '🐼', '🐸', '🦄', '🐙', '🐝', '🌸', '🌈', '⭐', '🍓', '🎨', '🚀', '👾', '🍩'];
 const COLORS = ['#ff6b5b', '#f2a93b', '#ffd23f', '#3fb68b', '#3aa6d8', '#6c7cff', '#b26cff', '#ff7eb6', '#2b2530', '#8d6e63'];
 
@@ -54,23 +52,26 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { me = null; renderLogin(); throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Ошибка');
+  if (!res.ok) throw new Error(tErr(data.error));
   return data;
 }
 
 function renderMe() {
-  meBox.replaceChildren();
+  const langSelect = h('select', { class: 'lang', 'aria-label': 'Language', onchange: () => { setLang(langSelect.value); rerender(); } },
+    LANGS.map((l) => h('option', { value: l.code, selected: l.code === lang }, l.label)));
+  document.getElementById('brand').textContent = t('app.title');
+  meBox.replaceChildren(langSelect);
   if (!me) return;
   meBox.append(
-    h('a', { href: '#/profile', title: 'Профиль' }, avatarEl(me, 32), h('span', {}, me.nickname)),
-    h('button', { onclick: async () => { await fetch('/auth/logout', { method: 'POST' }); location.href = '/'; } }, 'Выйти'),
+    h('a', { href: '#/profile', title: t('me.profile') }, avatarEl(me, 32), h('span', { class: 'nick' }, me.nickname)),
+    h('button', { onclick: async () => { await fetch('/auth/logout', { method: 'POST' }); location.href = '/'; } }, t('me.logout')),
   );
 }
 
 async function postJson(path, body) {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
   if (r.ok) return null;
-  return (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
+  return tErr((await r.json().catch(() => ({}))).error || 'generic');
 }
 
 // Панель из 12 картинок: нажимаешь 3 по порядку, onDone получает индексы.
@@ -85,7 +86,7 @@ function picturePad(pictures, onDone, onClear) {
     if (picked.length === 3) onDone([...picked]);
   } }, p)));
   const reset = () => { picked = []; drawSlots(); };
-  const back = h('button', { type: 'button', class: 'pic-back', onclick: () => { const wasFull = picked.length === 3; picked.pop(); drawSlots(); if (wasFull) onClear?.(); } }, '⌫ Стереть');
+  const back = h('button', { type: 'button', class: 'pic-back', onclick: () => { const wasFull = picked.length === 3; picked.pop(); drawSlots(); if (wasFull) onClear?.(); } }, t('pics.erase'));
   drawSlots();
   return { el: h('div', { class: 'pic-box' }, slots, pad, back), reset };
 }
@@ -95,25 +96,25 @@ async function renderLogin() {
   renderMe();
   const cfg = await fetch('/auth/config').then((r) => r.json());
   const err = new URLSearchParams(location.search).get('error');
-  const box = h('div', { class: 'login' }, h('h1', {}, '🎨 Рисуем вместе'));
+  const box = h('div', { class: 'login' }, h('h1', {}, `🎨 ${t('app.title')}`));
   app.replaceChildren(box);
-  if (err) box.append(h('p', { class: 'error' }, 'Не получилось войти, попробуйте ещё раз.'));
+  if (err) box.append(h('p', { class: 'error' }, t('login.failed')));
 
   if (!cfg.invited) {
-    box.append(h('p', {}, 'Общие полотна, на которых можно рисовать с друзьями.'));
+    box.append(h('p', {}, t('app.tagline')));
     if (cfg.invite) {
-      const code = h('input', { type: 'text', placeholder: 'Код приглашения', autocomplete: 'off' });
+      const code = h('input', { type: 'text', placeholder: t('login.invitePlaceholder'), autocomplete: 'off' });
       const msg = h('p', { class: 'error' });
       box.append(h('form', { onsubmit: async (e) => {
         e.preventDefault();
         msg.textContent = (await postJson('/auth/invite', { code: code.value })) || '';
         if (!msg.textContent) renderLogin();
       } },
-      h('p', {}, 'Введите код приглашения от друзей:'),
-      h('div', { class: 'row', style: 'justify-content:center' }, code, h('button', { class: 'primary', type: 'submit' }, 'Дальше')),
+      h('p', {}, t('login.inviteAsk')),
+      h('div', { class: 'row', style: 'justify-content:center' }, code, h('button', { class: 'primary', type: 'submit' }, t('login.next'))),
       msg));
     }
-    if (cfg.google) box.append(h('p', {}, h('a', { href: '/auth/google' }, h('button', { class: 'google-btn' }, 'Войти через Google'))));
+    if (cfg.google) box.append(h('p', {}, h('a', { href: '/auth/google' }, h('button', { class: 'google-btn' }, t('login.google')))));
   } else {
     const { pictures, people } = await fetch('/auth/people').then((r) => r.json());
     const msg = h('p', { class: 'error' });
@@ -126,21 +127,21 @@ async function renderLogin() {
         setTimeout(() => { box.classList.remove('shake'); pad.reset(); }, 500);
       });
       box.replaceChildren(
-        h('h1', {}, '🎨 Рисуем вместе'),
+        h('h1', {}, `🎨 ${t('app.title')}`),
         h('div', { class: 'preview', style: 'justify-content:center' }, avatarEl(person, 64), h('b', { style: 'font-size:22px' }, person.nickname)),
-        h('p', {}, 'Нажми свои 3 картинки по порядку'),
+        h('p', {}, t('login.tapPics')),
         pad.el, msg,
-        h('button', { type: 'button', onclick: renderLogin }, '← Это не я'));
+        h('button', { type: 'button', onclick: renderLogin }, t('login.notMe')));
     };
     box.append(
-      h('h2', {}, 'Кто ты?'),
+      h('h2', {}, t('login.who')),
       people.length ? h('div', { class: 'people-grid' }, people.map((p) => h('button', { type: 'button', class: 'person-btn', onclick: () => pickPerson(p) }, avatarEl(p, 56), h('span', {}, p.nickname))))
-        : h('p', { class: 'muted' }, 'Пока здесь никого нет. Будь первым!'),
+        : h('p', { class: 'muted' }, t('login.empty')),
       h('p', { style: 'margin-top:20px' }, h('button', { class: 'primary', type: 'button', onclick: async () => {
         const e = await postJson('/auth/new');
         if (!e) location.href = '/#/profile';
-      } }, '✨ Я здесь впервые')),
-      cfg.google ? h('p', {}, h('a', { href: '/auth/google' }, 'Войти через Google')) : null,
+      } }, t('login.new'))),
+      cfg.google ? h('p', {}, h('a', { href: '/auth/google' }, t('login.google'))) : null,
     );
   }
 
@@ -157,16 +158,16 @@ async function renderLobby() {
     const faces = h('div', { class: 'faces', 'data-canvas': c.id });
     fillFaces(faces, c.online);
     return h('a', { class: 'card', href: `#/c/${c.id}` },
-      h('span', { class: `badge ${c.type}` }, TYPE_INFO[c.type].label),
-      h('h3', {}, c.name),
-      h('p', {}, TYPE_INFO[c.type].text),
+      h('span', { class: `badge ${c.type}` }, typeLabel(c.type)),
+      h('h3', {}, tCanvas(c.name)),
+      h('p', {}, typeText(c.type)),
       faces);
   });
-  app.replaceChildren(h('h2', {}, 'Полотна'), h('div', { class: 'grid' }, cards));
+  app.replaceChildren(h('h2', {}, t('lobby.title')), h('div', { class: 'grid' }, cards));
 }
 
 function fillFaces(el, users) {
-  el.replaceChildren(...(users.length ? users.slice(0, 6).map((u) => avatarEl(u, 26)) : [h('span', {}, 'Пока никого')]));
+  el.replaceChildren(...(users.length ? users.slice(0, 6).map((u) => avatarEl(u, 26)) : [h('span', {}, t('lobby.nobody'))]));
   if (users.length > 6) el.append(h('span', {}, `+${users.length - 6}`));
 }
 
@@ -195,44 +196,44 @@ function renderProfile() {
   const needsPics = me.id.startsWith('invite:');
   let newPics = null;
   const picMsg = h('p', { class: 'muted' });
-  const picPad = picturePad(me.pictures, (pics) => { newPics = pics; picMsg.textContent = 'Запомни эти 3 картинки! Нажми «Сохранить».'; },
+  const picPad = picturePad(me.pictures, (pics) => { newPics = pics; picMsg.textContent = t('profile.picRemember'); },
     () => { newPics = null; picMsg.textContent = ''; });
   const picBox = h('div', { class: 'keybox' },
-    h('label', {}, 'Картиночный пароль'),
+    h('label', {}, t('profile.picTitle')),
     h('p', { class: 'muted' }, me.hasPicPassword
-      ? 'Пароль уже есть. Чтобы поменять, нажми 3 новые картинки.'
-      : 'Выбери 3 картинки по порядку. Их нужно будет нажать, чтобы войти снова.'),
+      ? t('profile.picHas')
+      : t('profile.picNew')),
     picPad.el, picMsg);
 
   const save = async (e) => {
     e.preventDefault();
     err.textContent = '';
     try {
-      if (needsPics && !me.hasPicPassword && !newPics) throw new Error('Выбери 3 картинки для пароля.');
+      if (needsPics && !me.hasPicPassword && !newPics) throw new Error(tErr('need_pics'));
       await api('/api/me', { method: 'PUT', body: JSON.stringify({ nickname: nick.value.trim() || me.nickname, avatar }) });
       if (newPics) await api('/api/me/pic-password', { method: 'PUT', body: JSON.stringify({ pics: newPics }) });
       me = await api('/api/me');
       if (socket) { socket.disconnect(); socket = null; } // новое соединение подхватит обновлённый профиль
       renderMe();
-      toast('Профиль сохранён');
+      toast(t('profile.saved'));
       location.hash = '#/';
     } catch (ex) { err.textContent = ex.message; }
   };
 
   app.replaceChildren(h('form', { class: 'profile', onsubmit: save },
-    h('h2', { style: 'margin-top:0' }, me.needsProfile ? 'Привет! Как вас называть?' : 'Профиль'),
+    h('h2', { style: 'margin-top:0' }, me.needsProfile ? t('profile.hello') : t('me.profile')),
     preview,
-    h('label', {}, 'Никнейм'), nick,
-    h('label', {}, 'Аватар'),
+    h('label', {}, t('profile.nick')), nick,
+    h('label', {}, t('profile.avatar')),
     h('div', { class: 'row' },
-      me.googlePicture ? h('button', { type: 'button', onclick: () => { avatar = 'google'; updatePreview(); } }, 'Фото из Google') : null,
-      h('button', { type: 'button', onclick: () => file.click() }, 'Загрузить картинку'), file),
-    h('p', { class: 'muted' }, 'Или соберите свой: выберите значок и цвет фона.'),
+      me.googlePicture ? h('button', { type: 'button', onclick: () => { avatar = 'google'; updatePreview(); } }, t('profile.googlePhoto')) : null,
+      h('button', { type: 'button', onclick: () => file.click() }, t('profile.upload')), file),
+    h('p', { class: 'muted' }, t('profile.build')),
     emojiGrid, h('div', { style: 'height:10px' }), swatches,
     needsPics ? picBox : null,
     err,
-    h('div', { class: 'row', style: 'margin-top:20px' }, h('button', { class: 'primary', type: 'submit' }, 'Сохранить'),
-      me.needsProfile ? null : h('a', { href: '#/' }, h('button', { type: 'button' }, 'Отмена')))));
+    h('div', { class: 'row', style: 'margin-top:20px' }, h('button', { class: 'primary', type: 'submit' }, t('profile.save')),
+      me.needsProfile ? null : h('a', { href: '#/' }, h('button', { type: 'button' }, t('profile.cancel'))))));
   updatePreview();
 }
 
@@ -267,11 +268,11 @@ async function renderRoom(canvasId) {
   const s = ensureSocket();
   const lessons = await api('/api/lessons');
   const res = await new Promise((resolve) => s.emit('join', { canvasId }, resolve));
-  if (res.error) { app.replaceChildren(h('p', {}, 'Полотно не найдено. '), h('a', { href: '#/' }, 'К списку')); return; }
+  if (res.error) { app.replaceChildren(h('p', {}, t('room.notFound'), ' '), h('a', { href: '#/' }, t('room.toList'))); return; }
   const { canvas } = res;
   let state = res.state;
   let people = res.presence;
-  const nameOf = (id) => people.find((p) => p.id === id)?.nickname || 'игрок';
+  const nameOf = (id) => people.find((p) => p.id === id)?.nickname || t('room.player');
 
   const stage = h('div', { class: 'stage' });
   const board = new Board(stage, {
@@ -281,8 +282,8 @@ async function renderRoom(canvasId) {
   board.setStrokes(res.strokes);
 
   const sizeInput = h('input', { type: 'range', min: 2, max: 60, value: 6, oninput: () => { board.size = Number(sizeInput.value); } });
-  const penBtn = h('button', { class: 'active', onclick: () => pickTool('pen') }, '✏️ Кисть');
-  const eraserBtn = h('button', { onclick: () => pickTool('eraser') }, '🧽 Ластик');
+  const penBtn = h('button', { class: 'active', onclick: () => pickTool('pen') }, t('tool.pen'));
+  const eraserBtn = h('button', { onclick: () => pickTool('eraser') }, t('tool.eraser'));
   const pickTool = (t) => { board.tool = t; penBtn.classList.toggle('active', t === 'pen'); eraserBtn.classList.toggle('active', t === 'eraser'); };
   const swatchBtns = COLORS.map((c) => h('button', { class: 'swatch', style: `background:${c}`, title: c, onclick: () => pickColor(c) }));
   const custom = h('input', { type: 'color', value: '#2b2530', oninput: () => pickColor(custom.value) });
@@ -290,23 +291,23 @@ async function renderRoom(canvasId) {
   pickColor('#2b2530');
 
   const toolbar = h('div', { class: 'toolbar' },
-    penBtn, eraserBtn, ...swatchBtns, custom, h('span', { class: 'muted' }, 'Толщина'), sizeInput,
-    h('button', { onclick: () => { const id = board.lastOwnStrokeId(); if (id) s.emit('stroke:undo', { id }); } }, '↩️ Отменить'),
-    canvas.type !== 'rounds' ? h('button', { onclick: () => { if (confirm('Очистить полотно для всех?')) s.emit('canvas:clear'); } }, '🗑️ Очистить') : null,
-    h('button', { onclick: () => board.download(`${canvas.name}.png`) }, '💾 Сохранить PNG'));
+    penBtn, eraserBtn, ...swatchBtns, custom, h('span', { class: 'muted' }, t('tool.size')), sizeInput,
+    h('button', { onclick: () => { const id = board.lastOwnStrokeId(); if (id) s.emit('stroke:undo', { id }); } }, t('tool.undo')),
+    canvas.type !== 'rounds' ? h('button', { onclick: () => { if (confirm(t('tool.clearConfirm'))) s.emit('canvas:clear'); } }, t('tool.clear')) : null,
+    h('button', { onclick: () => board.download(`${canvas.name}.png`) }, t('tool.png')));
 
   const peoplePanel = h('div', { class: 'panel' });
   const modePanel = h('div', { class: 'panel' });
   const side = h('div', { class: 'side' }, canvas.type === 'free' ? null : modePanel, peoplePanel);
 
   app.replaceChildren(
-    h('div', { class: 'room-head' }, h('a', { href: '#/' }, '← Полотна'), h('h2', {}, canvas.name), h('span', { class: `badge ${canvas.type}` }, TYPE_INFO[canvas.type].label)),
+    h('div', { class: 'room-head' }, h('a', { href: '#/' }, t('room.back')), h('h2', {}, tCanvas(canvas.name)), h('span', { class: `badge ${canvas.type}` }, typeLabel(canvas.type))),
     h('div', { class: 'room' }, h('div', {}, stage, toolbar), side),
   );
   board.resize();
 
   function renderPeople() {
-    peoplePanel.replaceChildren(h('h4', {}, `Сейчас здесь: ${people.length}`), h('div', { class: 'people' },
+    peoplePanel.replaceChildren(h('h4', {}, t('room.here', { n: people.length })), h('div', { class: 'people' },
       people.map((p) => h('div', { class: `person ${state.drawer === p.id ? 'drawing' : ''}` }, avatarEl(p, 28), p.nickname, state.drawer === p.id ? ' ✏️' : ''))));
   }
 
@@ -324,7 +325,7 @@ async function renderRoom(canvasId) {
     board.locked = !myTurn;
     stage.classList.toggle('locked', !myTurn);
     const timer = h('div', { class: 'timer' });
-    const upd = () => { timer.textContent = state.turnEndsAt ? `${Math.max(0, Math.ceil((state.turnEndsAt - Date.now()) / 1000))} с` : ''; };
+    const upd = () => { timer.textContent = state.turnEndsAt ? t('rounds.sec', { n: Math.max(0, Math.ceil((state.turnEndsAt - Date.now()) / 1000)) }) : ''; };
     upd();
     if (state.status === 'playing') tick = setInterval(upd, 250);
     const players = h('div', { class: 'people' }, state.players.map((id) => {
@@ -332,39 +333,39 @@ async function renderRoom(canvasId) {
       return h('div', { class: 'person' }, avatarEl(p, 24), p.nickname);
     }));
     fill(modePanel, 
-      h('h4', {}, 'Раунды'),
-      state.status === 'lobby' ? h('p', { class: 'muted' }, 'Присоединяйтесь и начните игру. Каждый по очереди рисует на общую тему; ход длится ограниченное время.') : null,
-      state.status === 'finished' ? h('p', { class: 'hint' }, `Игра окончена! Тема была: «${state.prompt}»`) : null,
+      h('h4', {}, t('rounds.title')),
+      state.status === 'lobby' ? h('p', { class: 'muted' }, t('rounds.lobby')) : null,
+      state.status === 'finished' ? h('p', { class: 'hint' }, t('rounds.finished', { p: tPrompt(state) })) : null,
       state.status === 'playing' ? h('div', {},
-        h('p', { class: 'muted' }, 'Тема'), h('p', { class: 'hint' }, state.prompt),
-        myTurn ? h('div', { class: 'banner' }, 'Ваш ход! Рисуйте') : h('p', {}, `Рисует: `, h('b', {}, nameOf(state.drawer))),
+        h('p', { class: 'muted' }, t('rounds.theme')), h('p', { class: 'hint' }, tPrompt(state)),
+        myTurn ? h('div', { class: 'banner' }, t('rounds.yourTurn')) : h('p', {}, t('rounds.drawing'), h('b', {}, nameOf(state.drawer))),
         timer,
-        h('p', { class: 'muted' }, `Ход ${state.turn} из ${state.order.length}`)) : null,
-      h('p', { class: 'muted' }, `Игроки (${state.players.length}):`), players,
+        h('p', { class: 'muted' }, t('rounds.turnOf', { a: state.turn, b: state.order.length }))) : null,
+      h('p', { class: 'muted' }, t('rounds.players', { n: state.players.length })), players,
       h('div', { class: 'row', style: 'margin-top:12px' },
-        state.status !== 'playing' && !joined ? h('button', { class: 'primary', onclick: () => s.emit('rounds:join') }, 'Участвовать') : null,
-        joined && state.status !== 'playing' ? h('button', { class: 'primary', onclick: () => s.emit('rounds:start') }, state.status === 'finished' ? 'Новая игра' : 'Начать') : null,
-        myTurn ? h('button', { onclick: () => s.emit('rounds:pass') }, 'Готово, передать ход') : null,
-        joined ? h('button', { onclick: () => s.emit('rounds:leave') }, 'Выйти из игры') : null));
+        state.status !== 'playing' && !joined ? h('button', { class: 'primary', onclick: () => s.emit('rounds:join') }, t('rounds.join')) : null,
+        joined && state.status !== 'playing' ? h('button', { class: 'primary', onclick: () => s.emit('rounds:start') }, state.status === 'finished' ? t('rounds.newGame') : t('rounds.start')) : null,
+        myTurn ? h('button', { onclick: () => s.emit('rounds:pass') }, t('rounds.pass')) : null,
+        joined ? h('button', { onclick: () => s.emit('rounds:leave') }, t('rounds.leave')) : null));
   }
 
   function renderLesson() {
     const lesson = lessons.find((l) => l.id === state.lessonId) || lessons[0];
     board.setGuide(lesson.steps.map((st) => st.path), state.step);
     const select = h('select', { onchange: () => s.emit('lesson:set', { lessonId: select.value }) },
-      lessons.map((l) => h('option', { value: l.id, selected: l.id === lesson.id }, l.title)));
+      lessons.map((l) => h('option', { value: l.id, selected: l.id === lesson.id }, tText(l.title))));
     const showGuide = h('input', { type: 'checkbox', checked: board.showGuide, onchange: () => { board.showGuide = showGuide.checked; board.drawGuide(); } });
     fill(modePanel, 
-      h('h4', {}, 'Помощник'),
-      h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Урок:'), select),
+      h('h4', {}, t('lesson.title')),
+      h('div', { class: 'row' }, h('span', { class: 'muted' }, t('lesson.lesson')), select),
       h('div', { class: 'steps' }, lesson.steps.map((_, i) => h('span', { class: i <= state.step ? 'done' : '' }))),
-      h('p', { class: 'muted' }, `Шаг ${state.step + 1} из ${lesson.steps.length}`),
-      h('p', { class: 'hint' }, lesson.steps[state.step].hint),
+      h('p', { class: 'muted' }, t('lesson.step', { a: state.step + 1, b: lesson.steps.length })),
+      h('p', { class: 'hint' }, tText(lesson.steps[state.step].hint)),
       h('div', { class: 'row' },
-        h('button', { disabled: state.step === 0, onclick: () => s.emit('lesson:step', { delta: -1 }) }, '← Назад'),
-        h('button', { class: 'primary', disabled: state.step === lesson.steps.length - 1, onclick: () => s.emit('lesson:step', { delta: 1 }) }, 'Дальше →')),
-      h('label', { class: 'row muted', style: 'margin-top:12px' }, showGuide, 'Показывать подсказку'),
-      h('p', { class: 'muted' }, 'Обведите пунктир. Шаги общие для всех, кто на полотне.'));
+        h('button', { disabled: state.step === 0, onclick: () => s.emit('lesson:step', { delta: -1 }) }, t('lesson.back')),
+        h('button', { class: 'primary', disabled: state.step === lesson.steps.length - 1, onclick: () => s.emit('lesson:step', { delta: 1 }) }, t('lesson.next'))),
+      h('label', { class: 'row muted', style: 'margin-top:12px' }, showGuide, t('lesson.showGuide')),
+      h('p', { class: 'muted' }, t('lesson.note')));
   }
 
   renderMode();
@@ -373,12 +374,12 @@ async function renderRoom(canvasId) {
     'stroke:live': (m) => board.remoteLive(m),
     'stroke:add': (m) => board.remoteAdd(m),
     'stroke:remove': ({ id }) => board.remove(id),
-    'canvas:cleared': (m) => { board.clear(); if (m?.by) toast(`${m.by} очистил(а) полотно`); },
+    'canvas:cleared': (m) => { board.clear(); if (m?.by) toast(t('toast.cleared', { who: m.by })); },
     state: (st) => {
       const prevDrawer = state.drawer;
       state = st;
       renderMode();
-      if (canvas.type === 'rounds' && st.drawer === me.id && prevDrawer !== me.id) toast('Ваш ход!');
+      if (canvas.type === 'rounds' && st.drawer === me.id && prevDrawer !== me.id) toast(t('rounds.toastTurn'));
     },
     presence: (p) => { people = p; renderPeople(); if (canvas.type === 'rounds') renderRounds(); },
   };
@@ -413,5 +414,13 @@ async function route() {
   else { ensureSocket(); await renderLobby(); }
 }
 
+// Смена языка: перерисовываем текущий экран.
+function rerender() {
+  renderMe();
+  if (me) route(); else renderLogin();
+}
+
+applyDocumentLang();
+renderMe();
 window.addEventListener('hashchange', route);
 route();

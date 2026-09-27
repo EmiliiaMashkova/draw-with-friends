@@ -45,16 +45,16 @@ function authRouter(store) {
     if (a.n >= 5) { a.n = 0; a.until = Date.now() + 60_000; }
     attempts.set(k, a);
   };
-  const TOO_MANY = { error: 'Слишком много попыток, подождите минуту.' };
+  const TOO_MANY = { error: 'too_many' };
 
   router.post('/auth/invite', express.json(), (req, res) => {
-    if (!inviteCode) return res.status(404).json({ error: 'Вход по коду выключен.' });
+    if (!inviteCode) return res.status(404).json({ error: 'invite_off' });
     if (throttled(req.ip)) return res.status(429).json(TOO_MANY);
     const given = Buffer.from(String(req.body.code || '').trim().toLowerCase());
     const expected = Buffer.from(inviteCode.trim().toLowerCase());
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
       failed(req.ip);
-      return res.status(403).json({ error: 'Неверный код.' });
+      return res.status(403).json({ error: 'bad_code' });
     }
     attempts.delete(req.ip);
     req.session.invited = true;
@@ -62,13 +62,13 @@ function authRouter(store) {
   });
 
   router.get('/auth/people', async (req, res) => {
-    if (!invited(req)) return res.status(403).json({ error: 'Нужен код приглашения.' });
+    if (!invited(req)) return res.status(403).json({ error: 'need_invite' });
     const people = (await store.listPicUsers()).map((u) => ({ ...u, avatar: u.avatar === 'google' ? null : u.avatar }));
     res.json({ pictures: PICTURES, people });
   });
 
   router.post('/auth/new', async (req, res) => {
-    if (!invited(req)) return res.status(403).json({ error: 'Нужен код приглашения.' });
+    if (!invited(req)) return res.status(403).json({ error: 'need_invite' });
     const user = await store.upsertGoogleUser({
       id: `invite:${crypto.randomUUID()}`, email: null, googleName: null, googlePicture: null,
     });
@@ -77,7 +77,7 @@ function authRouter(store) {
   });
 
   router.post('/auth/pic', express.json(), async (req, res) => {
-    if (!invited(req)) return res.status(403).json({ error: 'Нужен код приглашения.' });
+    if (!invited(req)) return res.status(403).json({ error: 'need_invite' });
     const userId = String(req.body.userId || '');
     const k = `${req.ip}|${userId}`;
     if (throttled(k)) return res.status(429).json(TOO_MANY);
@@ -85,7 +85,7 @@ function authRouter(store) {
     const user = pics && (await store.getUser(userId));
     if (!user || !user.picHash || user.picHash !== hashPics(user.id, pics)) {
       failed(k);
-      return res.status(403).json({ error: 'Не те картинки, попробуй ещё раз.' });
+      return res.status(403).json({ error: 'wrong_pics' });
     }
     attempts.delete(k);
     req.session.uid = user.id;

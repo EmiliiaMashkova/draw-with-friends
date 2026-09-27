@@ -20,7 +20,7 @@ test('publicUser подставляет фото Google и имя по умол�
 test('у каждого урока есть шаги с подсказкой и контуром', () => {
   for (const l of LESSONS) {
     assert.ok(l.steps.length > 0);
-    for (const s of l.steps) assert.ok(s.hint && s.path.startsWith('M'));
+    for (const s of l.steps) assert.ok(s.hint.me && s.hint.en && s.hint.ru && s.path.startsWith('M'));
   }
 });
 

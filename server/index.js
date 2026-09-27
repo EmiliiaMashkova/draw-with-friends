@@ -55,15 +55,15 @@ async function main() {
   app.put('/api/me', requireUser, async (req, res) => {
     const nickname = String(req.body.nickname || '').trim().replace(/\s+/g, ' ');
     const avatar = String(req.body.avatar || 'google');
-    if (nickname.length < 2 || nickname.length > 24) return res.status(400).json({ error: 'Никнейм: от 2 до 24 символов.' });
-    if (avatar.length > MAX_AVATAR_LEN || !AVATAR_RE.test(avatar)) return res.status(400).json({ error: 'Неподходящий аватар.' });
+    if (nickname.length < 2 || nickname.length > 24) return res.status(400).json({ error: 'nick_len' });
+    if (avatar.length > MAX_AVATAR_LEN || !AVATAR_RE.test(avatar)) return res.status(400).json({ error: 'bad_avatar' });
     const user = await store.updateProfile(req.user.id, { nickname, avatar });
     res.json(publicUser(user));
   });
 
   app.put('/api/me/pic-password', requireUser, async (req, res) => {
     const pics = cleanPics(req.body.pics);
-    if (!pics) return res.status(400).json({ error: 'Выберите 3 картинки.' });
+    if (!pics) return res.status(400).json({ error: 'need_pics' });
     await store.setPicHash(req.user.id, hashPics(req.user.id, pics));
     res.json({ ok: true });
   });
