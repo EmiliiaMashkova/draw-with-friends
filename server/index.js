@@ -13,6 +13,7 @@ const { createActivity, log } = require('./activity');
 const PORT = Number(process.env.PORT || 8080);
 const AVATAR_RE = /^(google|emoji:[^:]{1,8}:#[0-9a-fA-F]{6}|data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+)$/;
 const MAX_AVATAR_LEN = 200_000;
+const MAX_PICTURE_BYTES = 600_000;
 
 async function main() {
   const store = createStore();
@@ -40,9 +41,6 @@ async function main() {
   app.get('/readyz', (req, res) => res.send('ok'));
 
   app.use(session);
-  app.use(express.json({ limit: '300kb' }));
-  app.use(authRouter(store));
-
   const requireUser = async (req, res, next) => {
     const user = req.session.uid && (await store.getUser(req.session.uid));
     if (!user) return res.status(401).json({ error: 'unauthorized' });
@@ -50,6 +48,23 @@ async function main() {
     activity.touch(user.id);
     next();
   };
+
+  // Галерея: картинка приходит как JPEG в data URL, поэтому у этого маршрута свой лимит размера.
+  const lastSave = new Map(); // userId -> время последнего сохранения
+  app.post('/api/gallery', express.json({ limit: '1mb' }), requireUser, async (req, res) => {
+    const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body.image || ''));
+    const image = m && Buffer.from(m[1], 'base64');
+    if (!image || image.length > MAX_PICTURE_BYTES || image[0] !== 0xff || image[1] !== 0xd8) return res.status(400).json({ error: 'bad_picture' });
+    if (Date.now() - (lastSave.get(req.user.id) || 0) < 10_000) return res.status(429).json({ error: 'too_fast' });
+    lastSave.set(req.user.id, Date.now());
+    const title = String(req.body.title || '').replace(/\s+/g, ' ').trim().slice(0, 40) || '…';
+    const id = await store.addPicture(req.user.id, title, image);
+    log('gallery-add', { who: req.user.nickname, id });
+    res.json({ id });
+  });
+
+  app.use(express.json({ limit: '300kb' }));
+  app.use(authRouter(store));
 
   app.get('/api/me', requireUser, (req, res) => {
     res.json({ ...publicUser(req.user), rawAvatar: req.user.avatar || 'google', googlePicture: req.user.googlePicture, needsProfile: !req.user.nickname, hasPicPassword: Boolean(req.user.picHash), pictures: PICTURES });
@@ -79,6 +94,26 @@ async function main() {
 
   app.get('/api/stats', requireUser, async (req, res) => {
     res.json(await activity.stats(rooms.onlineCount()));
+  });
+
+  app.get('/api/gallery', requireUser, async (req, res) => {
+    const list = await store.listPictures(req.user.id, req.query.sort === 'top' ? 'top' : 'new');
+    res.json(list.map((p) => ({ ...p, author: publicUser(p.author) })));
+  });
+  app.get('/api/gallery/:id.jpg', requireUser, async (req, res) => {
+    const image = await store.getPictureImage(Number(req.params.id));
+    if (!image) return res.status(404).end();
+    res.set('Cache-Control', 'private, max-age=86400').type('jpeg').send(image);
+  });
+  app.post('/api/gallery/:id/like', requireUser, async (req, res) => {
+    const r = await store.toggleLike(Number(req.params.id), req.user.id);
+    if (!r) return res.status(404).json({ error: 'not_found' });
+    res.json(r);
+  });
+  app.delete('/api/gallery/:id', requireUser, async (req, res) => {
+    if (!(await store.deletePicture(Number(req.params.id), req.user.id))) return res.status(404).json({ error: 'not_found' });
+    log('gallery-delete', { who: req.user.nickname, id: req.params.id });
+    res.json({ ok: true });
   });
 
   app.get('/api/lessons', requireUser, (req, res) => res.json(LESSONS));

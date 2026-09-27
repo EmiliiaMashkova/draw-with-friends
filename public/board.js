@@ -2,9 +2,73 @@
 export const W = 1600;
 export const H = 1200;
 
+// Размер штампа в логических пикселях по значению ползунка «Толщина» (2..60).
+export const stampPx = (size) => 70 + size * 4;
+
+function drawStamp(ctx, s) {
+  const [x, y] = s.points[0];
+  ctx.save();
+  ctx.font = `${stampPx(s.size)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(s.stamp, x, y);
+  ctx.restore();
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// Заливка по пикселям холста: закрашиваем область, похожую по цвету (на белом фоне) на точку нажатия,
+// и ещё 1 пиксель вокруг, чтобы не оставалось светлой каймы у сглаженных линий.
+function floodFill(ctx, s) {
+  const c = ctx.canvas;
+  const W0 = c.width;
+  const H0 = c.height;
+  const m = ctx.getTransform();
+  const sx = Math.floor(m.a * s.points[0][0] + m.e);
+  const sy = Math.floor(m.d * s.points[0][1] + m.f);
+  if (sx < 0 || sy < 0 || sx >= W0 || sy >= H0) return;
+  const img = ctx.getImageData(0, 0, W0, H0);
+  const d = img.data;
+  const seen = new Uint8Array(W0 * H0);
+  // Цвет пикселя, каким его видно на белом листе.
+  const shade = (i) => {
+    const a = d[i + 3] / 255;
+    return [d[i] * a + 255 * (1 - a), d[i + 1] * a + 255 * (1 - a), d[i + 2] * a + 255 * (1 - a)];
+  };
+  const seed = shade((sy * W0 + sx) * 4);
+  const [fr, fg, fb] = hexToRgb(s.color);
+  const same = (p) => {
+    const [r, g, b] = shade(p * 4);
+    return Math.abs(r - seed[0]) + Math.abs(g - seed[1]) + Math.abs(b - seed[2]) <= 90;
+  };
+  const stack = [sy * W0 + sx];
+  seen[stack[0]] = 1;
+  const filled = [];
+  while (stack.length) {
+    const p = stack.pop();
+    filled.push(p);
+    const x = p % W0;
+    const y = (p - x) / W0;
+    const tryPush = (q) => { if (!seen[q]) { seen[q] = 1; if (same(q)) stack.push(q); else seen[q] = 2; } };
+    if (x > 0) tryPush(p - 1);
+    if (x < W0 - 1) tryPush(p + 1);
+    if (y > 0) tryPush(p - W0);
+    if (y < H0 - 1) tryPush(p + W0);
+  }
+  const paint = (p) => { const i = p * 4; d[i] = fr; d[i + 1] = fg; d[i + 2] = fb; d[i + 3] = 255; };
+  // seen=2: граница; красим только полупрозрачную кайму сглаживания, сама линия остаётся.
+  for (let p = 0; p < seen.length; p++) if (seen[p] === 1 || (seen[p] === 2 && d[p * 4 + 3] < 250)) paint(p);
+  ctx.putImageData(img, 0, 0);
+}
+
 function drawStroke(ctx, s, preview = false) {
   const pts = s.points;
   if (!pts.length) return;
+  if (s.tool === 'stamp') return drawStamp(ctx, s);
+  if (s.tool === 'fill') return preview ? undefined : floodFill(ctx, s);
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -51,6 +115,7 @@ export class Board {
     this.color = '#2b2530';
     this.size = 6;
     this.tool = 'pen';
+    this.stamp = '⭐';
     this.locked = false;
     this.guide = null;
     this.showGuide = true;
@@ -183,6 +248,13 @@ export class Board {
     };
     el.addEventListener('pointerdown', (e) => {
       if (this.locked || e.button > 0) return;
+      if (this.tool === 'fill' || this.tool === 'stamp') {
+        // Одно нажатие: сразу готовый штрих, без рисования в процессе.
+        this.current = { sid: Math.random().toString(36).slice(2), tool: this.tool, color: this.color, size: this.size, points: [this.toLogical(e)] };
+        if (this.tool === 'stamp') this.current.stamp = this.stamp;
+        finish();
+        return;
+      }
       el.setPointerCapture(e.pointerId);
       sent = 0;
       this.current = {
@@ -208,6 +280,7 @@ export class Board {
       const s = this.current;
       this.current = null;
       const entry = { id: null, data: { tool: s.tool, color: s.color, size: s.size, points: s.points } };
+      if (s.stamp) entry.data.stamp = s.stamp;
       this.strokes.push(entry);
       drawStroke(this.mainCanvas.getContext('2d'), entry.data);
       this.scheduleLive();
@@ -219,14 +292,22 @@ export class Board {
     el.addEventListener('pointercancel', finish);
   }
 
-  download(name) {
+  // Рисунок на белом фоне заданного размера.
+  flatten(w = W, hgt = H) {
     const c = document.createElement('canvas');
-    c.width = W;
-    c.height = H;
+    c.width = w;
+    c.height = hgt;
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, W, H);
-    ctx.drawImage(this.mainCanvas, 0, 0, W, H);
+    ctx.fillRect(0, 0, w, hgt);
+    ctx.drawImage(this.mainCanvas, 0, 0, w, hgt);
+    return c;
+  }
+
+  snapshotJpeg() { return this.flatten(800, 600).toDataURL('image/jpeg', 0.85); }
+
+  download(name) {
+    const c = this.flatten();
     const a = document.createElement('a');
     a.href = c.toDataURL('image/png');
     a.download = name;

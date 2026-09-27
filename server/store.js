@@ -7,7 +7,9 @@ const DEFAULT_CANVASES = [
   { name: 'Эстафета', type: 'rounds' },
   { name: 'Тема дня', type: 'rounds' },
   { name: 'Рисуем с помощником', type: 'assisted' },
+  { name: 'Угадайка', type: 'guess' },
 ];
+const GALLERY_LIMIT = 60;
 
 class MemoryStore {
   constructor() {
@@ -15,6 +17,7 @@ class MemoryStore {
     this.canvases = [];
     this.strokes = new Map(); // canvasId -> [{id, userId, data}]
     this.seq = 1;
+    this.gallery = []; // {id, userId, title, image(Buffer), createdAt, likes:Set}
   }
   async init() {
     DEFAULT_CANVASES.forEach((c, i) => this.canvases.push({ id: i + 1, ...c }));
@@ -70,6 +73,35 @@ class MemoryStore {
     return true;
   }
   async clearStrokes(canvasId) { this.strokes.set(canvasId, []); }
+  async addPicture(userId, title, image) {
+    const p = { id: this.seq++, userId, title, image, createdAt: new Date().toISOString(), likes: new Set() };
+    this.gallery.push(p);
+    return p.id;
+  }
+  async listPictures(viewerId, sort) {
+    const list = [...this.gallery].reverse();
+    if (sort === 'top') list.sort((a, b) => b.likes.size - a.likes.size || b.id - a.id);
+    return list.slice(0, GALLERY_LIMIT).map((p) => {
+      const u = this.users.get(p.userId) || {};
+      return {
+        id: p.id, title: p.title, createdAt: p.createdAt, likes: p.likes.size, liked: p.likes.has(viewerId),
+        mine: p.userId === viewerId, author: { id: p.userId, nickname: u.nickname, googleName: u.googleName, avatar: u.avatar, googlePicture: u.googlePicture },
+      };
+    });
+  }
+  async getPictureImage(id) { return this.gallery.find((p) => p.id === id)?.image || null; }
+  async toggleLike(id, userId) {
+    const p = this.gallery.find((x) => x.id === id);
+    if (!p) return null;
+    if (p.likes.has(userId)) p.likes.delete(userId); else p.likes.add(userId);
+    return { likes: p.likes.size, liked: p.likes.has(userId) };
+  }
+  async deletePicture(id, userId) {
+    const i = this.gallery.findIndex((p) => p.id === id && p.userId === userId);
+    if (i < 0) return false;
+    this.gallery.splice(i, 1);
+    return true;
+  }
 }
 
 class PgStore {
@@ -91,7 +123,7 @@ class PgStore {
       CREATE TABLE IF NOT EXISTS canvases (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
-        type TEXT NOT NULL CHECK (type IN ('free', 'rounds', 'assisted')),
+        type TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       CREATE TABLE IF NOT EXISTS strokes (
@@ -108,12 +140,32 @@ class PgStore {
         day DATE NOT NULL,
         PRIMARY KEY (user_id, day)
       );
+      ALTER TABLE canvases DROP CONSTRAINT IF EXISTS canvases_type_check;
+      CREATE TABLE IF NOT EXISTS gallery (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        image BYTEA NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS gallery_likes (
+        picture_id INT NOT NULL REFERENCES gallery(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (picture_id, user_id)
+      );
     `);
     const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM canvases');
     if (rows[0].n === 0) {
       for (const c of DEFAULT_CANVASES) {
         await this.pool.query('INSERT INTO canvases (name, type) VALUES ($1, $2)', [c.name, c.type]);
       }
+    }
+    // Новые типы полотен добавляем и в уже заполненную базу, по одному полотну на тип.
+    for (const c of DEFAULT_CANVASES) {
+      await this.pool.query(
+        'INSERT INTO canvases (name, type) SELECT $1, $2 WHERE NOT EXISTS (SELECT 1 FROM canvases WHERE type = $2)',
+        [c.name, c.type],
+      );
     }
   }
   static rowToUser(r) {
@@ -195,6 +247,45 @@ class PgStore {
   }
   async clearStrokes(canvasId) {
     await this.pool.query('DELETE FROM strokes WHERE canvas_id = $1', [canvasId]);
+  }
+  async addPicture(userId, title, image) {
+    const { rows } = await this.pool.query(
+      'INSERT INTO gallery (user_id, title, image) VALUES ($1, $2, $3) RETURNING id',
+      [userId, title, image],
+    );
+    return rows[0].id;
+  }
+  async listPictures(viewerId, sort) {
+    const order = sort === 'top' ? 'likes DESC, g.id DESC' : 'g.id DESC';
+    const { rows } = await this.pool.query(
+      `SELECT g.id, g.title, g.created_at, g.user_id,
+              u.nickname, u.google_name, u.avatar, u.google_picture,
+              (SELECT count(*)::int FROM gallery_likes l WHERE l.picture_id = g.id) AS likes,
+              EXISTS (SELECT 1 FROM gallery_likes l WHERE l.picture_id = g.id AND l.user_id = $1) AS liked
+         FROM gallery g JOIN users u ON u.id = g.user_id
+        ORDER BY ${order} LIMIT ${GALLERY_LIMIT}`,
+      [viewerId],
+    );
+    return rows.map((r) => ({
+      id: r.id, title: r.title, createdAt: r.created_at, likes: r.likes, liked: r.liked, mine: r.user_id === viewerId,
+      author: { id: r.user_id, nickname: r.nickname, googleName: r.google_name, avatar: r.avatar, googlePicture: r.google_picture },
+    }));
+  }
+  async getPictureImage(id) {
+    const { rows } = await this.pool.query('SELECT image FROM gallery WHERE id = $1', [id]);
+    return rows[0]?.image || null;
+  }
+  async toggleLike(id, userId) {
+    const { rowCount: exists } = await this.pool.query('SELECT 1 FROM gallery WHERE id = $1', [id]);
+    if (!exists) return null;
+    const { rowCount } = await this.pool.query('DELETE FROM gallery_likes WHERE picture_id = $1 AND user_id = $2', [id, userId]);
+    if (!rowCount) await this.pool.query('INSERT INTO gallery_likes (picture_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [id, userId]);
+    const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM gallery_likes WHERE picture_id = $1', [id]);
+    return { likes: rows[0].n, liked: !rowCount };
+  }
+  async deletePicture(id, userId) {
+    const { rowCount } = await this.pool.query('DELETE FROM gallery WHERE id = $1 AND user_id = $2', [id, userId]);
+    return rowCount > 0;
   }
 }
 

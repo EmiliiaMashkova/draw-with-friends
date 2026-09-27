@@ -154,3 +154,30 @@ select.lang { border: 1px solid var(--line); background: var(--panel); border-ra
 .stat b { font-size: 44px; line-height: 1; }
 .stat span { color: var(--muted); }
 .stat.online b { color: var(--free); }
+.badge.guess { background: #ff7eb6; }
+.stamp-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.stamp-btn { font-size: 24px; width: 44px; height: 44px; padding: 0; }
+.react-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.react-bar button { font-size: 22px; padding: 4px 10px; border-radius: 99px; }
+.fly-layer { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+.fly { position: absolute; bottom: 0; display: flex; flex-direction: column; align-items: center; animation: fly-up 2.5s ease-out forwards; }
+.fly span { font-size: 44px; line-height: 1; }
+.fly small { font-size: 12px; font-weight: 800; color: #6b5f73; background: rgba(255,255,255,.85); padding: 1px 6px; border-radius: 99px; }
+@keyframes fly-up {
+  0% { transform: translateY(0) scale(.6); opacity: 0; }
+  15% { transform: translateY(-15%) scale(1.1); opacity: 1; }
+  100% { transform: translateY(-420%) scale(1); opacity: 0; }
+}
+.secret { font-size: 28px; margin-top: 4px; letter-spacing: 1px; }
+.mask { font-size: 26px; font-weight: 800; letter-spacing: 6px; margin: 8px 0; font-family: ui-monospace, monospace; }
+.scores { margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+.chat { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 14px; margin-bottom: 8px; }
+.chat-ok { color: var(--free); font-weight: 800; }
+.chat-form input { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.pic { margin: 0; background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+.pic img { width: 100%; aspect-ratio: 4 / 3; display: block; background: #fff; }
+.pic figcaption { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.heart { border-radius: 99px; padding: 4px 12px; font-weight: 800; }
+.heart.on { border-color: #ff7eb6; }
+.room-head a + a { font-weight: 600; }

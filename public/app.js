@@ -7,6 +7,9 @@ const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter((k) => k 
 const typeLabel = (type) => t(`type.${type}.label`);
 const typeText = (type) => t(`type.${type}.text`);
 const EMOJIS = ['🐱', '🐶', '🦊', '🐼', '🐸', '🦄', '🐙', '🐝', '🌸', '🌈', '⭐', '🍓', '🎨', '🚀', '👾', '🍩'];
+const STAMPS = ['⭐', '❤️', '🌸', '🌈', '☀️', '🌙', '🦋', '🐱', '🐶', '🐠', '🦄', '🍓', '🍭', '🎈', '🚗', '👑'];
+const REACTIONS = ['❤️', '😂', '😮', '👏', '🔥', '⭐', '🎉', '👍'];
+const isGame = (type) => type === 'rounds' || type === 'guess';
 const COLORS = ['#ff6b5b', '#f2a93b', '#ffd23f', '#3fb68b', '#3aa6d8', '#6c7cff', '#b26cff', '#ff7eb6', '#2b2530', '#8d6e63'];
 
 let me = null;
@@ -172,6 +175,35 @@ async function renderStats() {
   await load();
 }
 
+let gallerySort = 'new';
+async function renderGallery() {
+  const list = await api(`/api/gallery?sort=${gallerySort}`);
+  const sortBtn = (key) => h('button', { class: gallerySort === key ? 'active' : '', onclick: () => { gallerySort = key; renderGallery(); } }, t(`gallery.${key}`));
+  const heart = (p) => {
+    const btn = h('button', { class: `heart ${p.liked ? 'on' : ''}`, onclick: async () => {
+      const r = await api(`/api/gallery/${p.id}/like`, { method: 'POST' });
+      btn.classList.toggle('on', r.liked);
+      btn.textContent = `${r.liked ? '❤️' : '🤍'} ${r.likes}`;
+    } }, `${p.liked ? '❤️' : '🤍'} ${p.likes}`);
+    return btn;
+  };
+  const cards = list.map((p) => h('figure', { class: 'pic' },
+    h('img', { src: `/api/gallery/${p.id}.jpg`, alt: p.title, loading: 'lazy' }),
+    h('figcaption', {},
+      h('span', { class: 'row' }, avatarEl(p.author, 24), h('b', {}, p.author.nickname)),
+      h('span', { class: 'muted' }, tCanvas(p.title)),
+      h('span', { class: 'row' }, heart(p),
+        p.mine ? h('button', { title: t('gallery.delete'), onclick: async () => {
+          if (!confirm(t('gallery.deleteConfirm'))) return;
+          await api(`/api/gallery/${p.id}`, { method: 'DELETE' });
+          renderGallery();
+        } }, '🗑️') : null))));
+  app.replaceChildren(
+    h('div', { class: 'room-head' }, h('a', { href: '#/' }, t('room.back')), h('h2', {}, t('gallery.title')),
+      h('span', { class: 'row', style: 'margin-left:auto' }, sortBtn('new'), sortBtn('top'))),
+    cards.length ? h('div', { class: 'gallery' }, cards) : h('p', { class: 'muted' }, t('gallery.empty')));
+}
+
 async function renderLobby() {
   const list = await api('/api/canvases');
   const cards = list.map((c) => {
@@ -184,7 +216,8 @@ async function renderLobby() {
       faces);
   });
   app.replaceChildren(
-    h('div', { class: 'room-head' }, h('h2', {}, t('lobby.title')), h('a', { href: '#/stats', class: 'stats-link' }, t('stats.link'))),
+    h('div', { class: 'room-head' }, h('h2', {}, t('lobby.title')),
+      h('a', { href: '#/gallery', class: 'stats-link' }, t('gallery.link')), h('a', { href: '#/stats' }, t('stats.link'))),
     h('div', { class: 'grid' }, cards));
 }
 
@@ -304,27 +337,57 @@ async function renderRoom(canvasId) {
   board.setStrokes(res.strokes);
 
   const sizeInput = h('input', { type: 'range', min: 2, max: 60, value: 6, oninput: () => { board.size = Number(sizeInput.value); } });
-  const penBtn = h('button', { class: 'active', onclick: () => pickTool('pen') }, t('tool.pen'));
-  const eraserBtn = h('button', { onclick: () => pickTool('eraser') }, t('tool.eraser'));
-  const pickTool = (t) => { board.tool = t; penBtn.classList.toggle('active', t === 'pen'); eraserBtn.classList.toggle('active', t === 'eraser'); };
+  const toolBtns = Object.fromEntries(['pen', 'eraser', 'fill', 'stamp'].map((name) => [name, h('button', { onclick: () => pickTool(name) }, t(`tool.${name}`))]));
+  const stampBtns = STAMPS.map((e) => h('button', { class: 'stamp-btn', onclick: () => pickStamp(e) }, e));
+  const stampRow = h('div', { class: 'stamp-row', hidden: true }, stampBtns);
+  const pickStamp = (e) => { board.stamp = e; stampBtns.forEach((b) => b.classList.toggle('active', b.textContent === e)); pickTool('stamp'); };
+  const pickTool = (name) => {
+    board.tool = name;
+    for (const [k, b] of Object.entries(toolBtns)) b.classList.toggle('active', k === name);
+    stampRow.hidden = name !== 'stamp';
+  };
   const swatchBtns = COLORS.map((c) => h('button', { class: 'swatch', style: `background:${c}`, title: c, onclick: () => pickColor(c) }));
   const custom = h('input', { type: 'color', value: '#2b2530', oninput: () => pickColor(custom.value) });
-  const pickColor = (c) => { board.color = c; pickTool('pen'); swatchBtns.forEach((b) => b.classList.toggle('active', b.title === c)); };
+  // Цвет нужен кисти и заливке: при выборе цвета из ластика или штампа возвращаемся к кисти.
+  const pickColor = (c) => { board.color = c; if (board.tool !== 'fill') pickTool('pen'); swatchBtns.forEach((b) => b.classList.toggle('active', b.title === c)); };
   pickColor('#2b2530');
+  stampBtns[0].classList.add('active');
+
+  const saveToGallery = async (btn) => {
+    btn.disabled = true;
+    try {
+      await api('/api/gallery', { method: 'POST', body: JSON.stringify({ image: board.snapshotJpeg(), title: tCanvas(canvas.name) }) });
+      toast(t('gallery.saved'));
+    } catch (ex) { toast(ex.message); }
+    setTimeout(() => { btn.disabled = false; }, 3000);
+  };
+
+  // Летающие реакции поверх полотна.
+  const flyLayer = h('div', { class: 'fly-layer' });
+  stage.append(flyLayer);
+  const fly = (emoji, who) => {
+    const el = h('div', { class: 'fly', style: `left:${8 + Math.random() * 84}%` }, h('span', {}, emoji), h('small', {}, who));
+    flyLayer.append(el);
+    setTimeout(() => el.remove(), 2600);
+  };
+  const reactBar = h('div', { class: 'react-bar' }, REACTIONS.map((e) => h('button', { onclick: () => s.emit('react', { emoji: e }) }, e)));
 
   const toolbar = h('div', { class: 'toolbar' },
-    penBtn, eraserBtn, ...swatchBtns, custom, h('span', { class: 'muted' }, t('tool.size')), sizeInput,
+    ...Object.values(toolBtns), ...swatchBtns, custom, h('span', { class: 'muted' }, t('tool.size')), sizeInput,
     h('button', { onclick: () => { const id = board.lastOwnStrokeId(); if (id) s.emit('stroke:undo', { id }); } }, t('tool.undo')),
-    canvas.type !== 'rounds' ? h('button', { onclick: () => { if (confirm(t('tool.clearConfirm'))) s.emit('canvas:clear'); } }, t('tool.clear')) : null,
-    h('button', { onclick: () => board.download(`${canvas.name}.png`) }, t('tool.png')));
+    !isGame(canvas.type) ? h('button', { onclick: () => { if (confirm(t('tool.clearConfirm'))) s.emit('canvas:clear'); } }, t('tool.clear')) : null,
+    h('button', { onclick: () => board.download(`${tCanvas(canvas.name)}.png`) }, t('tool.png')),
+    h('button', { onclick: (e) => saveToGallery(e.currentTarget) }, t('tool.gallery')));
+  pickTool('pen');
 
   const peoplePanel = h('div', { class: 'panel' });
   const modePanel = h('div', { class: 'panel' });
-  const side = h('div', { class: 'side' }, canvas.type === 'free' ? null : modePanel, peoplePanel);
+  const chatPanel = h('div', { class: 'panel' });
+  const side = h('div', { class: 'side' }, canvas.type === 'free' ? null : modePanel, canvas.type === 'guess' ? chatPanel : null, peoplePanel);
 
   app.replaceChildren(
     h('div', { class: 'room-head' }, h('a', { href: '#/' }, t('room.back')), h('h2', {}, tCanvas(canvas.name)), h('span', { class: `badge ${canvas.type}` }, typeLabel(canvas.type))),
-    h('div', { class: 'room' }, h('div', {}, stage, toolbar), side),
+    h('div', { class: 'room' }, h('div', {}, stage, toolbar, stampRow, reactBar), side),
   );
   board.resize();
 
@@ -338,6 +401,7 @@ async function renderRoom(canvasId) {
     clearInterval(tick);
     if (canvas.type === 'rounds') renderRounds();
     if (canvas.type === 'assisted') renderLesson();
+    if (canvas.type === 'guess') renderGuess();
     renderPeople();
   }
 
@@ -371,6 +435,57 @@ async function renderRoom(canvasId) {
         joined ? h('button', { onclick: () => s.emit('rounds:leave') }, t('rounds.leave')) : null));
   }
 
+  const chatLog = h('div', { class: 'chat' });
+  const chatInput = h('input', { type: 'text', maxlength: 40, autocomplete: 'off' });
+  const chatForm = h('form', { class: 'row chat-form', onsubmit: (e) => {
+    e.preventDefault();
+    if (chatInput.value.trim()) s.emit('guess:say', { text: chatInput.value });
+    chatInput.value = '';
+  } }, chatInput, h('button', { class: 'primary', type: 'submit' }, t('guess.send')));
+  const addChat = (m) => {
+    chatLog.append(h('div', { class: m.correct ? 'chat-ok' : '' }, h('b', {}, `${m.who}: `),
+      m.correct ? t('guess.correct', { n: m.points }) : m.text));
+    while (chatLog.children.length > 40) chatLog.firstChild.remove();
+    chatLog.scrollTop = chatLog.scrollHeight;
+  };
+
+  fill(chatPanel, h('h4', {}, t('guess.chat')), chatLog, chatForm);
+
+  function renderGuess() {
+    const joined = state.players.includes(me.id);
+    const myTurn = state.status === 'playing' && state.drawer === me.id;
+    const guessed = state.guessed?.includes(me.id);
+    board.locked = !myTurn;
+    stage.classList.toggle('locked', !myTurn);
+    const timer = h('div', { class: 'timer' });
+    const upd = () => { timer.textContent = state.turnEndsAt ? t('rounds.sec', { n: Math.max(0, Math.ceil((state.turnEndsAt - Date.now()) / 1000)) }) : ''; };
+    upd();
+    if (state.status === 'playing') tick = setInterval(upd, 250);
+    const scores = Object.entries(state.scores || {}).sort((a, b) => b[1] - a[1]);
+    chatInput.placeholder = myTurn ? t('guess.drawerQuiet') : t('guess.placeholder');
+    chatInput.disabled = state.status === 'playing' && (myTurn || guessed);
+    fill(modePanel,
+      h('h4', {}, t('guess.title')),
+      state.status === 'lobby' ? h('p', { class: 'muted' }, t('guess.lobby')) : null,
+      state.lastWord ? h('p', { class: 'muted' }, t('guess.wasWord', { w: tText(state.lastWord) })) : null,
+      state.status === 'finished' ? h('p', { class: 'hint' }, t('guess.finished')) : null,
+      state.status === 'playing' ? h('div', {},
+        myTurn && state.word ? h('div', { class: 'banner' }, t('guess.drawThis'), h('div', { class: 'secret' }, tText(state.word)))
+          : h('p', {}, t('rounds.drawing'), h('b', {}, nameOf(state.drawer))),
+        !myTurn && state.mask ? h('div', { class: 'mask' }, tText(state.mask)) : null,
+        guessed ? h('p', { class: 'chat-ok' }, t('guess.youGuessed')) : null,
+        timer,
+        h('p', { class: 'muted' }, t('rounds.turnOf', { a: state.turn, b: state.order.length }))) : null,
+      scores.length ? h('div', { class: 'scores' }, h('p', { class: 'muted' }, t('guess.scores')),
+        scores.map(([id, n], i) => h('div', { class: 'person' }, `${['🥇', '🥈', '🥉'][i] || '⭐'} ${state.names?.[id] || nameOf(id)}`, h('b', { style: 'margin-left:auto' }, String(n))))) : null,
+      h('p', { class: 'muted' }, t('rounds.players', { n: state.players.length })),
+      h('div', { class: 'row', style: 'margin-top:8px' },
+        state.status !== 'playing' && !joined ? h('button', { class: 'primary', onclick: () => s.emit('rounds:join') }, t('rounds.join')) : null,
+        joined && state.status !== 'playing' ? h('button', { class: 'primary', onclick: () => s.emit('rounds:start') }, state.status === 'finished' ? t('rounds.newGame') : t('rounds.start')) : null,
+        myTurn ? h('button', { onclick: () => s.emit('rounds:pass') }, t('guess.skip')) : null,
+        joined ? h('button', { onclick: () => s.emit('rounds:leave') }, t('rounds.leave')) : null));
+  }
+
   function renderLesson() {
     const lesson = lessons.find((l) => l.id === state.lessonId) || lessons[0];
     board.setGuide(lesson.steps.map((st) => st.path), state.step);
@@ -401,9 +516,11 @@ async function renderRoom(canvasId) {
       const prevDrawer = state.drawer;
       state = st;
       renderMode();
-      if (canvas.type === 'rounds' && st.drawer === me.id && prevDrawer !== me.id) toast(t('rounds.toastTurn'));
+      if (isGame(canvas.type) && st.drawer === me.id && prevDrawer !== me.id) toast(t('rounds.toastTurn'));
     },
-    presence: (p) => { people = p; renderPeople(); if (canvas.type === 'rounds') renderRounds(); },
+    presence: (p) => { people = p; renderMode(); },
+    'guess:msg': (m) => { addChat(m); if (m.correct && m.who === me.nickname) toast(t('guess.youGuessed')); },
+    react: ({ emoji, who }) => fly(emoji, who),
   };
   for (const [ev, fn] of Object.entries(handlers)) s.on(ev, fn);
   const onResize = () => board.resize();
@@ -433,6 +550,7 @@ async function route() {
   const m = hash.match(/^#\/c\/(\d+)/);
   if (hash === '#/profile') renderProfile();
   else if (hash === '#/stats') await renderStats();
+  else if (hash === '#/gallery') await renderGallery();
   else if (m) await renderRoom(Number(m[1]));
   else { ensureSocket(); await renderLobby(); }
 }

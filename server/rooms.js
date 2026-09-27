@@ -1,8 +1,13 @@
 // Логика полотен в реальном времени: присутствие, штрихи, раунды и уроки с помощником.
 const { LESSONS } = require('./lessons');
 const { log } = require('./activity');
+const { WORDS, isCorrect, mask } = require('./words');
 
 const TURN_SECONDS = Number(process.env.TURN_SECONDS || 45);
+const GUESS_SECONDS = Number(process.env.GUESS_SECONDS || 75);
+const REACTIONS = ['❤️', '😂', '😮', '👏', '🔥', '⭐', '🎉', '👍'];
+const STAMP_RE = /^[\p{Extended_Pictographic}\p{Emoji_Modifier}‍️]{1,8}$/u;
+const isGame = (c) => c.type === 'rounds' || c.type === 'guess';
 const LAPS = 2; // сколько раз каждый игрок рисует за игру
 // Порядок важен: клиент переводит тему по индексу promptId (public/i18n.js).
 const PROMPTS = [
@@ -20,7 +25,7 @@ function publicUser(u) {
 
 function cleanStroke(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const tool = raw.tool === 'eraser' ? 'eraser' : 'pen';
+  const tool = ['eraser', 'fill', 'stamp'].includes(raw.tool) ? raw.tool : 'pen';
   const color = COLOR_RE.test(raw.color) ? raw.color : '#000000';
   const size = Math.min(80, Math.max(1, Number(raw.size) || 4));
   if (!Array.isArray(raw.points) || raw.points.length === 0 || raw.points.length > MAX_POINTS) return null;
@@ -32,7 +37,23 @@ function cleanStroke(raw) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     points.push([Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
   }
-  return { tool, color, size, points };
+  // Заливка и штамп ставятся одним нажатием в одну точку.
+  if ((tool === 'fill' || tool === 'stamp') && points.length !== 1) return null;
+  if (tool !== 'stamp') return { tool, color, size, points };
+  if (typeof raw.stamp !== 'string' || !STAMP_RE.test(raw.stamp)) return null;
+  return { tool, color, size, points, stamp: raw.stamp };
+}
+
+// Состояние «Угадайки» для конкретного игрока: слово видит только тот, кто рисует.
+function publicState(st, userId) {
+  if (!st || st.kind !== 'guess') return st;
+  const { wordId, used, ...rest } = st;
+  const word = wordId != null ? WORDS[wordId] : null;
+  return {
+    ...rest,
+    word: word && userId === st.drawer ? { me: word.me, en: word.en, ru: word.ru } : null,
+    mask: word ? mask(word) : null,
+  };
 }
 
 function setupRooms(io, store, activity) {
@@ -56,7 +77,13 @@ function setupRooms(io, store, activity) {
 
   function initialState(canvas) {
     if (canvas.type === 'rounds') {
-      return { status: 'lobby', players: [], order: [], turn: 0, drawer: null, prompt: null, turnEndsAt: null };
+      return { kind: 'rounds', status: 'lobby', players: [], order: [], turn: 0, drawer: null, prompt: null, turnEndsAt: null };
+    }
+    if (canvas.type === 'guess') {
+      return {
+        kind: 'guess', status: 'lobby', players: [], order: [], turn: 0, drawer: null, turnEndsAt: null,
+        wordId: null, used: [], guessed: [], scores: {}, names: {}, lastWord: null,
+      };
     }
     if (canvas.type === 'assisted') return { lessonId: LESSONS[0].id, step: 0 };
     return {};
@@ -68,7 +95,24 @@ function setupRooms(io, store, activity) {
   }
 
   function broadcastState(canvasId) {
-    io.to(room(canvasId)).emit('state', states.get(canvasId));
+    const st = states.get(canvasId);
+    if (st.kind !== 'guess') return io.to(room(canvasId)).emit('state', st);
+    for (const [sid, u] of presence.get(canvasId) || []) io.sockets.sockets.get(sid)?.emit('state', publicState(st, u.id));
+  }
+
+  // «Угадайка»: у каждого хода новое слово и чистое полотно.
+  function revealWord(st) {
+    if (st.wordId != null) st.lastWord = { ...WORDS[st.wordId] };
+    st.wordId = null;
+  }
+  function pickWord(canvasId, st) {
+    let free = WORDS.map((_, i) => i).filter((i) => !st.used.includes(i));
+    if (!free.length) { st.used = []; free = WORDS.map((_, i) => i); }
+    st.wordId = free[Math.floor(Math.random() * free.length)];
+    st.used.push(st.wordId);
+    st.guessed = [];
+    store.clearStrokes(canvasId).catch((err) => console.error('clear error', err.message));
+    io.to(room(canvasId)).emit('canvas:cleared');
   }
 
   function broadcastPresence(canvasId) {
@@ -81,13 +125,17 @@ function setupRooms(io, store, activity) {
     clearTimeout(timers.get(canvasId));
     const st = states.get(canvasId);
     if (!st || st.status !== 'playing') return;
+    const guess = st.kind === 'guess';
+    if (guess) revealWord(st);
+    const seconds = guess ? GUESS_SECONDS : TURN_SECONDS;
     while (st.turn < st.order.length) {
       const drawer = st.order[st.turn];
       st.turn += 1;
       if (isOnline(canvasId, drawer) && st.players.includes(drawer)) {
         st.drawer = drawer;
-        st.turnEndsAt = Date.now() + TURN_SECONDS * 1000;
-        timers.set(canvasId, setTimeout(() => nextTurn(canvasId), TURN_SECONDS * 1000));
+        if (guess) pickWord(canvasId, st);
+        st.turnEndsAt = Date.now() + seconds * 1000;
+        timers.set(canvasId, setTimeout(() => nextTurn(canvasId), seconds * 1000));
         broadcastState(canvasId);
         return;
       }
@@ -107,10 +155,14 @@ function setupRooms(io, store, activity) {
     st.players = players;
     st.order = Array.from({ length: LAPS }, () => shuffled).flat();
     st.turn = 0;
-    st.promptId = Math.floor(Math.random() * PROMPTS.length);
-    st.prompt = PROMPTS[st.promptId];
+    if (st.kind === 'guess') {
+      Object.assign(st, { scores: {}, guessed: [], lastWord: null, wordId: null });
+    } else {
+      st.promptId = Math.floor(Math.random() * PROMPTS.length);
+      st.prompt = PROMPTS[st.promptId];
+    }
     st.status = 'playing';
-    log('game-start', { canvas: canvasId, players: players.length, prompt: st.prompt });
+    log('game-start', { canvas: canvasId, kind: st.kind, players: players.length });
     await store.clearStrokes(canvasId);
     io.to(room(canvasId)).emit('canvas:cleared');
     nextTurn(canvasId);
@@ -149,7 +201,7 @@ function setupRooms(io, store, activity) {
       if (!presence.has(c.id)) presence.set(c.id, new Map());
       presence.get(c.id).set(socket.id, me);
       const strokes = await store.listStrokes(c.id);
-      ack?.({ canvas: c, strokes, state: getState(c), me, presence: presenceList(c.id) });
+      ack?.({ canvas: c, strokes, state: publicState(getState(c), me.id), me, presence: presenceList(c.id) });
       broadcastPresence(c.id);
     });
 
@@ -157,7 +209,7 @@ function setupRooms(io, store, activity) {
 
     function canDraw() {
       if (!canvas) return false;
-      if (canvas.type !== 'rounds') return true;
+      if (!isGame(canvas)) return true;
       const st = getState(canvas);
       return st.status === 'playing' && st.drawer === me.id;
     }
@@ -190,7 +242,7 @@ function setupRooms(io, store, activity) {
     });
 
     socket.on('canvas:clear', async () => {
-      if (!canvas || canvas.type === 'rounds') return;
+      if (!canvas || isGame(canvas)) return;
       const canvasId = canvas.id;
       await store.clearStrokes(canvasId);
       log('canvas-clear', { canvas: canvasId, by: me.nickname });
@@ -199,29 +251,71 @@ function setupRooms(io, store, activity) {
 
     // Раунды
     socket.on('rounds:join', () => {
-      if (!canvas || canvas.type !== 'rounds') return;
+      if (!canvas || !isGame(canvas)) return;
       const st = getState(canvas);
       if (st.status === 'playing' || st.players.includes(me.id)) return;
       st.players.push(me.id);
+      if (st.names) st.names[me.id] = me.nickname;
       broadcastState(canvas.id);
     });
     socket.on('rounds:leave', () => {
-      if (!canvas || canvas.type !== 'rounds') return;
+      if (!canvas || !isGame(canvas)) return;
       const st = getState(canvas);
       st.players = st.players.filter((id) => id !== me.id);
       if (st.status === 'playing' && st.drawer === me.id) nextTurn(canvas.id);
       else broadcastState(canvas.id);
     });
     socket.on('rounds:start', async () => {
-      if (!canvas || canvas.type !== 'rounds') return;
+      if (!canvas || !isGame(canvas)) return;
       const st = getState(canvas);
       if (st.status === 'playing' || !st.players.includes(me.id)) return;
       await startGame(canvas.id);
     });
     socket.on('rounds:pass', () => {
-      if (!canvas || canvas.type !== 'rounds') return;
+      if (!canvas || !isGame(canvas)) return;
       const st = getState(canvas);
       if (st.status === 'playing' && st.drawer === me.id) nextTurn(canvas.id);
+    });
+
+    // «Угадайка»: догадки в чат, за верный ответ очки угадавшему и художнику.
+    let lastSay = 0;
+    socket.on('guess:say', ({ text } = {}) => {
+      if (!canvas || canvas.type !== 'guess') return;
+      const said = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const now = Date.now();
+      if (!said || now - lastSay < 400) return;
+      lastSay = now;
+      const canvasId = canvas.id;
+      const st = getState(canvas);
+      const playing = st.status === 'playing' && st.wordId != null;
+      if (!playing) return io.to(room(canvasId)).emit('guess:msg', { who: me.nickname, text: said });
+      // Художник и уже угадавшие молчат, чтобы не подсказать слово.
+      if (st.drawer === me.id || st.guessed.includes(me.id)) return;
+      if (!isCorrect(WORDS[st.wordId], said)) return io.to(room(canvasId)).emit('guess:msg', { who: me.nickname, text: said });
+      const points = Math.max(1, 3 - st.guessed.length);
+      st.guessed.push(me.id);
+      st.names[me.id] = me.nickname;
+      st.scores[me.id] = (st.scores[me.id] || 0) + points;
+      st.scores[st.drawer] = (st.scores[st.drawer] || 0) + 1;
+      io.to(room(canvasId)).emit('guess:msg', { who: me.nickname, correct: true, points });
+      const guessers = presenceList(canvasId).filter((u) => u.id !== st.drawer);
+      if (guessers.every((u) => st.guessed.includes(u.id))) {
+        // Все угадали: короткая пауза и следующий ход.
+        clearTimeout(timers.get(canvasId));
+        st.turnEndsAt = Date.now() + 2000;
+        timers.set(canvasId, setTimeout(() => nextTurn(canvasId), 2000));
+      }
+      broadcastState(canvasId);
+    });
+
+    // Летающие эмодзи-реакции.
+    let lastReact = 0;
+    socket.on('react', ({ emoji } = {}) => {
+      if (!canvas || !REACTIONS.includes(emoji)) return;
+      const now = Date.now();
+      if (now - lastReact < 250) return;
+      lastReact = now;
+      io.to(room(canvas.id)).emit('react', { emoji, who: me.nickname });
     });
 
     // Уроки с помощником
@@ -253,4 +347,4 @@ function setupRooms(io, store, activity) {
   };
 }
 
-module.exports = { setupRooms, publicUser, cleanStroke };
+module.exports = { setupRooms, publicUser, cleanStroke, publicState, REACTIONS };

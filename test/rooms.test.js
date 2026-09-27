@@ -43,3 +43,26 @@ test('активность: дни по времени Черногории, 7 �
   assert.strictEqual(days[0], '2026-09-27');
   assert.strictEqual(days[6], '2026-09-21');
 });
+
+test('штампы и заливка: одна точка, штамп только эмодзи', () => {
+  assert.deepStrictEqual(cleanStroke({ tool: 'stamp', stamp: '⭐', color: '#ff0000', size: 10, points: [[5, 5]] }), {
+    tool: 'stamp', color: '#ff0000', size: 10, points: [[5, 5]], stamp: '⭐',
+  });
+  assert.strictEqual(cleanStroke({ tool: 'stamp', stamp: '<b>', points: [[5, 5]] }), null);
+  assert.strictEqual(cleanStroke({ tool: 'fill', color: '#00ff00', points: [[1, 1], [2, 2]] }), null);
+  assert.strictEqual(cleanStroke({ tool: 'fill', color: '#00ff00', points: [[1, 1]] }).tool, 'fill');
+});
+
+test('угадайка: слово видит только художник, ответ на любом языке', () => {
+  const { publicState } = require('../server/rooms');
+  const { WORDS, isCorrect } = require('../server/words');
+  const st = { kind: 'guess', drawer: 'a', wordId: 0, used: [0], guessed: [] };
+  assert.deepStrictEqual(publicState(st, 'a').word, { me: 'mačka', en: 'cat', ru: 'кошка' });
+  assert.strictEqual(publicState(st, 'b').word, null);
+  assert.strictEqual(publicState(st, 'b').mask.en, '___');
+  assert.strictEqual(publicState(st, 'b').wordId, undefined);
+  assert.ok(isCorrect(WORDS[0], ' Macka ') && isCorrect(WORDS[0], 'CAT') && isCorrect(WORDS[0], 'кот'));
+  assert.ok(!isCorrect(WORDS[0], 'dog'));
+  const plane = WORDS.find((w) => w.en === 'plane');
+  assert.ok(isCorrect(plane, 'самолет'));
+});
