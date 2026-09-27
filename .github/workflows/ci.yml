@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  deploy:
+    name: deploy to mctl drawing/draw-with-friends
+    needs: [check]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Skip if MCTL_GITHUB_TOKEN unset
+        id: gate
+        run: |
+          if [ -z "${{ secrets.MCTL_GITHUB_TOKEN }}" ]; then
+            echo "::warning::MCTL_GITHUB_TOKEN secret not set — skipping deploy"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          fetch-depth: 0
+
+      - name: Compute next SemVer patch
+        id: tag
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+          MAJOR_MINOR=$(echo "$LAST" | cut -d. -f1,2)
+          PATCH=$(echo "$LAST" | cut -d. -f3)
+          echo "tag=${MAJOR_MINOR}.$((PATCH + 1))" >> "$GITHUB_OUTPUT"
+
+      - name: Push new tag
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.tag.outputs.tag }}" \
+            -m "Auto-deploy ${{ steps.tag.outputs.tag }} from ${{ github.sha }}"
+          git push origin "${{ steps.tag.outputs.tag }}"
+
+      - name: Trigger mctl deploy-service
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          curl -fsS -X POST https://api.mctl.ai/api/v1/operations/deploy-service/execute \
+            -H "Authorization: Bearer ${{ secrets.MCTL_GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "action": "deploy",
+              "team_name": "drawing",
+              "component_name": "draw-with-friends",
+              "dockerfile_repo": "EmiliiaMashkova/draw-with-friends",
+              "git_tag": "${{ steps.tag.outputs.tag }}"
+            }'
