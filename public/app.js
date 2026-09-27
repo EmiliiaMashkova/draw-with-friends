@@ -67,53 +67,88 @@ function renderMe() {
   );
 }
 
+async function postJson(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  if (r.ok) return null;
+  return (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
+}
+
+// Панель из 12 картинок: нажимаешь 3 по порядку, onDone получает индексы.
+function picturePad(pictures, onDone, onClear) {
+  let picked = [];
+  const slots = h('div', { class: 'pic-slots' });
+  const drawSlots = () => slots.replaceChildren(...[0, 1, 2].map((i) => h('span', { class: 'pic-slot' }, picked[i] != null ? pictures[picked[i]] : '')));
+  const pad = h('div', { class: 'pic-pad' }, pictures.map((p, i) => h('button', { type: 'button', onclick: () => {
+    if (picked.length >= 3) return;
+    picked.push(i);
+    drawSlots();
+    if (picked.length === 3) onDone([...picked]);
+  } }, p)));
+  const reset = () => { picked = []; drawSlots(); };
+  const back = h('button', { type: 'button', class: 'pic-back', onclick: () => { const wasFull = picked.length === 3; picked.pop(); drawSlots(); if (wasFull) onClear?.(); } }, '⌫ Стереть');
+  drawSlots();
+  return { el: h('div', { class: 'pic-box' }, slots, pad, back), reset };
+}
+
 async function renderLogin() {
   if (leaveRoom) leaveRoom();
   renderMe();
   const cfg = await fetch('/auth/config').then((r) => r.json());
   const err = new URLSearchParams(location.search).get('error');
-  const box = h('div', { class: 'login' },
-    h('h1', {}, '🎨 Рисуем вместе'),
-    h('p', {}, 'Общие полотна, на которых можно рисовать с друзьями в реальном времени.'),
-    err ? h('p', { class: 'error' }, 'Не получилось войти, попробуйте ещё раз.') : null,
-    cfg.google
-      ? h('a', { href: '/auth/google' }, h('button', { class: 'google-btn primary' }, 'Войти через Google'))
-      : null,
-  );
-  if (cfg.invite) {
-    const code = h('input', { type: 'text', placeholder: 'Код приглашения', autocomplete: 'off' });
-    const msg = h('p', { class: 'error' });
-    const enter = async (e) => {
-      e.preventDefault();
-      msg.textContent = '';
-      const r = await fetch('/auth/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code.value }) });
-      if (r.ok) { location.href = '/'; return; }
-      msg.textContent = (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
-    };
-    box.append(h('form', { onsubmit: enter, style: 'margin-top:16px' },
-      h('p', {}, cfg.google ? 'Или войдите по коду приглашения:' : 'Первый раз? Введите код приглашения от друзей:'),
-      h('div', { class: 'row', style: 'justify-content:center' }, code, h('button', { class: cfg.google ? '' : 'primary', type: 'submit' }, 'Войти')),
+  const box = h('div', { class: 'login' }, h('h1', {}, '🎨 Рисуем вместе'));
+  app.replaceChildren(box);
+  if (err) box.append(h('p', { class: 'error' }, 'Не получилось войти, попробуйте ещё раз.'));
+
+  if (!cfg.invited) {
+    box.append(h('p', {}, 'Общие полотна, на которых можно рисовать с друзьями.'));
+    if (cfg.invite) {
+      const code = h('input', { type: 'text', placeholder: 'Код приглашения', autocomplete: 'off' });
+      const msg = h('p', { class: 'error' });
+      box.append(h('form', { onsubmit: async (e) => {
+        e.preventDefault();
+        msg.textContent = (await postJson('/auth/invite', { code: code.value })) || '';
+        if (!msg.textContent) renderLogin();
+      } },
+      h('p', {}, 'Введите код приглашения от друзей:'),
+      h('div', { class: 'row', style: 'justify-content:center' }, code, h('button', { class: 'primary', type: 'submit' }, 'Дальше')),
       msg));
-    const key = h('input', { type: 'text', placeholder: 'лиса-облако-123', autocomplete: 'off' });
-    const keyMsg = h('p', { class: 'error' });
-    const enterKey = async (e) => {
-      e.preventDefault();
-      keyMsg.textContent = '';
-      const r = await fetch('/auth/key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: key.value }) });
-      if (r.ok) { location.href = '/'; return; }
-      keyMsg.textContent = (await r.json().catch(() => ({}))).error || 'Не получилось войти.';
+    }
+    if (cfg.google) box.append(h('p', {}, h('a', { href: '/auth/google' }, h('button', { class: 'google-btn' }, 'Войти через Google'))));
+  } else {
+    const { pictures, people } = await fetch('/auth/people').then((r) => r.json());
+    const msg = h('p', { class: 'error' });
+    const pickPerson = (person) => {
+      const pad = picturePad(pictures, async (pics) => {
+        const e = await postJson('/auth/pic', { userId: person.id, pics });
+        if (!e) { location.href = '/'; return; }
+        msg.textContent = e;
+        box.classList.add('shake');
+        setTimeout(() => { box.classList.remove('shake'); pad.reset(); }, 500);
+      });
+      box.replaceChildren(
+        h('h1', {}, '🎨 Рисуем вместе'),
+        h('div', { class: 'preview', style: 'justify-content:center' }, avatarEl(person, 64), h('b', { style: 'font-size:22px' }, person.nickname)),
+        h('p', {}, 'Нажми свои 3 картинки по порядку'),
+        pad.el, msg,
+        h('button', { type: 'button', onclick: renderLogin }, '← Это не я'));
     };
-    box.append(h('form', { onsubmit: enterKey, style: 'margin-top:16px' },
-      h('p', {}, 'Уже рисовали здесь? Войдите своим личным ключом:'),
-      h('div', { class: 'row', style: 'justify-content:center' }, key, h('button', { type: 'submit' }, 'Войти')),
-      keyMsg));
+    box.append(
+      h('h2', {}, 'Кто ты?'),
+      people.length ? h('div', { class: 'people-grid' }, people.map((p) => h('button', { type: 'button', class: 'person-btn', onclick: () => pickPerson(p) }, avatarEl(p, 56), h('span', {}, p.nickname))))
+        : h('p', { class: 'muted' }, 'Пока здесь никого нет. Будь первым!'),
+      h('p', { style: 'margin-top:20px' }, h('button', { class: 'primary', type: 'button', onclick: async () => {
+        const e = await postJson('/auth/new');
+        if (!e) location.href = '/#/profile';
+      } }, '✨ Я здесь впервые')),
+      cfg.google ? h('p', {}, h('a', { href: '/auth/google' }, 'Войти через Google')) : null,
+    );
   }
+
   if (cfg.dev) {
     const input = h('input', { type: 'text', placeholder: 'Имя для теста', value: 'Тест' });
     box.append(h('div', { class: 'row', style: 'justify-content:center;margin-top:16px' }, input,
       h('button', { onclick: () => { location.href = `/auth/dev?name=${encodeURIComponent(input.value)}`; } }, 'Тестовый вход')));
   }
-  app.replaceChildren(box);
 }
 
 async function renderLobby() {
@@ -156,33 +191,26 @@ function renderProfile() {
     updatePreview();
   } });
 
-  // Личный ключ входа: нужен, чтобы вернуться в этот профиль с другого устройства или после выхода.
-  const keyBox = h('div', { class: 'keybox' });
-  const showKey = (key) => keyBox.replaceChildren(
-    h('label', {}, 'Ваш личный ключ входа'),
-    h('div', { class: 'row' }, h('code', { class: 'key' }, key),
-      h('button', { type: 'button', onclick: () => navigator.clipboard?.writeText(key).then(() => toast('Ключ скопирован')) }, 'Копировать')),
-    h('p', { class: 'muted' }, 'Запишите его! По этому ключу можно вернуться в свой профиль с любого устройства. Никому его не показывайте.'));
-  const newKey = async () => {
-    const { key } = await api('/api/me/login-key', { method: 'POST' });
-    me.hasLoginKey = true;
-    showKey(key);
-  };
-  if (me.id.startsWith('invite:')) {
-    if (me.hasLoginKey) {
-      keyBox.replaceChildren(h('label', {}, 'Личный ключ входа'),
-        h('p', { class: 'muted' }, 'Ключ уже есть. Если вы его потеряли, получите новый: старый перестанет работать.'),
-        h('button', { type: 'button', onclick: () => { if (confirm('Старый ключ перестанет работать. Получить новый?')) newKey(); } }, 'Получить новый ключ'));
-    } else {
-      newKey();
-    }
-  }
+  // Картиночный пароль нужен тем, кто вошёл по коду приглашения: им они возвращаются в свой профиль.
+  const needsPics = me.id.startsWith('invite:');
+  let newPics = null;
+  const picMsg = h('p', { class: 'muted' });
+  const picPad = picturePad(me.pictures, (pics) => { newPics = pics; picMsg.textContent = 'Запомни эти 3 картинки! Нажми «Сохранить».'; },
+    () => { newPics = null; picMsg.textContent = ''; });
+  const picBox = h('div', { class: 'keybox' },
+    h('label', {}, 'Картиночный пароль'),
+    h('p', { class: 'muted' }, me.hasPicPassword
+      ? 'Пароль уже есть. Чтобы поменять, нажми 3 новые картинки.'
+      : 'Выбери 3 картинки по порядку. Их нужно будет нажать, чтобы войти снова.'),
+    picPad.el, picMsg);
 
   const save = async (e) => {
     e.preventDefault();
     err.textContent = '';
     try {
+      if (needsPics && !me.hasPicPassword && !newPics) throw new Error('Выбери 3 картинки для пароля.');
       await api('/api/me', { method: 'PUT', body: JSON.stringify({ nickname: nick.value.trim() || me.nickname, avatar }) });
+      if (newPics) await api('/api/me/pic-password', { method: 'PUT', body: JSON.stringify({ pics: newPics }) });
       me = await api('/api/me');
       if (socket) { socket.disconnect(); socket = null; } // новое соединение подхватит обновлённый профиль
       renderMe();
@@ -201,7 +229,7 @@ function renderProfile() {
       h('button', { type: 'button', onclick: () => file.click() }, 'Загрузить картинку'), file),
     h('p', { class: 'muted' }, 'Или соберите свой: выберите значок и цвет фона.'),
     emojiGrid, h('div', { style: 'height:10px' }), swatches,
-    me.id.startsWith('invite:') ? keyBox : null,
+    needsPics ? picBox : null,
     err,
     h('div', { class: 'row', style: 'margin-top:20px' }, h('button', { class: 'primary', type: 'submit' }, 'Сохранить'),
       me.needsProfile ? null : h('a', { href: '#/' }, h('button', { type: 'button' }, 'Отмена')))));
@@ -377,7 +405,8 @@ async function route() {
     renderMe();
   }
   const hash = location.hash || '#/';
-  if (me.needsProfile && hash !== '#/profile') { location.hash = '#/profile'; return; }
+  const needsPics = me.id.startsWith('invite:') && !me.hasPicPassword;
+  if ((me.needsProfile || needsPics) && hash !== '#/profile') { location.hash = '#/profile'; return; }
   const m = hash.match(/^#\/c\/(\d+)/);
   if (hash === '#/profile') renderProfile();
   else if (m) await renderRoom(Number(m[1]));

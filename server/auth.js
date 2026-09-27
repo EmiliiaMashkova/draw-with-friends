@@ -11,22 +11,16 @@ function baseUrl(req) {
   return `${req.protocol}://${req.get('host')}`;
 }
 
-// Личный ключ входа: «слово-слово-число», чтобы вернуться в свой профиль с любого устройства.
-const KEY_WORDS = [
-  'лиса', 'кот', 'панда', 'сова', 'ёжик', 'кит', 'енот', 'пчела', 'жираф', 'заяц', 'волк', 'тигр', 'коала', 'пингвин',
-  'дельфин', 'белка', 'олень', 'бобр', 'лама', 'выдра', 'облако', 'радуга', 'звезда', 'луна', 'солнце', 'ракета',
-  'комета', 'гора', 'река', 'море', 'ветер', 'снег', 'дождь', 'цветок', 'клён', 'кактус', 'гриб', 'ягода', 'арбуз',
-  'пончик', 'вафля', 'кекс', 'карандаш', 'кисть', 'краска', 'мелок', 'зефир', 'фонарь', 'замок', 'маяк',
-];
-function newLoginKey() {
-  const w = () => KEY_WORDS[crypto.randomInt(KEY_WORDS.length)];
-  return `${w()}-${w()}-${crypto.randomInt(100, 1000)}`;
+// Картиночный пароль: 3 картинки из 12 по порядку. Храним только хеш с id пользователя в качестве соли.
+const PICTURES = ['🐱', '🐶', '🦊', '🐼', '🐸', '🦄', '🌈', '⭐', '🍓', '🍩', '🚀', '🌸'];
+const PIC_LEN = 3;
+function cleanPics(pics) {
+  if (!Array.isArray(pics) || pics.length !== PIC_LEN) return null;
+  const out = pics.map(Number);
+  return out.every((i) => Number.isInteger(i) && i >= 0 && i < PICTURES.length) ? out : null;
 }
-function normalizeKey(key) {
-  return String(key || '').trim().toLowerCase().replace(/ё/g, 'е').replace(/[\s_]+/g, '-');
-}
-function hashKey(key) {
-  return crypto.createHash('sha256').update(normalizeKey(key)).digest('hex');
+function hashPics(userId, pics) {
+  return crypto.createHash('sha256').update(`${userId}:${pics.join(',')}`).digest('hex');
 }
 
 function authRouter(store) {
@@ -35,45 +29,65 @@ function authRouter(store) {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const devLogin = process.env.DEV_LOGIN === 'true';
   const inviteCode = process.env.INVITE_CODE || '';
+  const invited = (req) => Boolean(req.session.invited || req.session.uid);
 
   router.get('/auth/config', (req, res) => {
-    res.json({ google: Boolean(clientId && clientSecret), invite: Boolean(inviteCode), dev: devLogin });
+    res.json({ google: Boolean(clientId && clientSecret), invite: Boolean(inviteCode), invited: invited(req), dev: devLogin });
   });
 
-  // Вход по коду приглашения: код знают только друзья; вернуться в свой профиль можно личным ключом.
-  const attempts = new Map(); // ip -> {n, until}
-  const throttled = (req) => (attempts.get(req.ip)?.until || 0) > Date.now();
-  const failed = (req) => {
-    const a = attempts.get(req.ip) || { n: 0, until: 0 };
+  // Код приглашения общий: он один раз открывает сайт на устройстве (флаг invited в cookie).
+  // Дальше человек выбирает себя в списке и нажимает свои 3 картинки, или создаёт новый профиль.
+  const attempts = new Map(); // ip или ip+user -> {n, until}
+  const throttled = (k) => (attempts.get(k)?.until || 0) > Date.now();
+  const failed = (k) => {
+    const a = attempts.get(k) || { n: 0, until: 0 };
     a.n += 1;
     if (a.n >= 5) { a.n = 0; a.until = Date.now() + 60_000; }
-    attempts.set(req.ip, a);
+    attempts.set(k, a);
   };
   const TOO_MANY = { error: 'Слишком много попыток, подождите минуту.' };
 
-  router.post('/auth/key', express.json(), async (req, res) => {
-    if (throttled(req)) return res.status(429).json(TOO_MANY);
-    const user = normalizeKey(req.body.key).length >= 5 ? await store.findUserByKeyHash(hashKey(req.body.key)) : null;
-    if (!user) { failed(req); return res.status(403).json({ error: 'Такой ключ не найден.' }); }
+  router.post('/auth/invite', express.json(), (req, res) => {
+    if (!inviteCode) return res.status(404).json({ error: 'Вход по коду выключен.' });
+    if (throttled(req.ip)) return res.status(429).json(TOO_MANY);
+    const given = Buffer.from(String(req.body.code || '').trim().toLowerCase());
+    const expected = Buffer.from(inviteCode.trim().toLowerCase());
+    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+      failed(req.ip);
+      return res.status(403).json({ error: 'Неверный код.' });
+    }
     attempts.delete(req.ip);
+    req.session.invited = true;
+    res.json({ ok: true });
+  });
+
+  router.get('/auth/people', async (req, res) => {
+    if (!invited(req)) return res.status(403).json({ error: 'Нужен код приглашения.' });
+    const people = (await store.listPicUsers()).map((u) => ({ ...u, avatar: u.avatar === 'google' ? null : u.avatar }));
+    res.json({ pictures: PICTURES, people });
+  });
+
+  router.post('/auth/new', async (req, res) => {
+    if (!invited(req)) return res.status(403).json({ error: 'Нужен код приглашения.' });
+    const user = await store.upsertGoogleUser({
+      id: `invite:${crypto.randomUUID()}`, email: null, googleName: null, googlePicture: null,
+    });
     req.session.uid = user.id;
     res.json({ ok: true });
   });
 
-  router.post('/auth/invite', express.json(), async (req, res) => {
-    if (!inviteCode) return res.status(404).json({ error: 'Вход по коду выключен.' });
-    if (throttled(req)) return res.status(429).json(TOO_MANY);
-    const given = Buffer.from(String(req.body.code || '').trim().toLowerCase());
-    const expected = Buffer.from(inviteCode.trim().toLowerCase());
-    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
-      failed(req);
-      return res.status(403).json({ error: 'Неверный код.' });
+  router.post('/auth/pic', express.json(), async (req, res) => {
+    if (!invited(req)) return res.status(403).json({ error: 'Нужен код приглашения.' });
+    const userId = String(req.body.userId || '');
+    const k = `${req.ip}|${userId}`;
+    if (throttled(k)) return res.status(429).json(TOO_MANY);
+    const pics = cleanPics(req.body.pics);
+    const user = pics && (await store.getUser(userId));
+    if (!user || !user.picHash || user.picHash !== hashPics(user.id, pics)) {
+      failed(k);
+      return res.status(403).json({ error: 'Не те картинки, попробуй ещё раз.' });
     }
-    attempts.delete(req.ip);
-    if (req.session.uid && (await store.getUser(req.session.uid))) return res.json({ ok: true });
-    const user = await store.upsertGoogleUser({
-      id: `invite:${crypto.randomUUID()}`, email: null, googleName: null, googlePicture: null,
-    });
+    attempts.delete(k);
     req.session.uid = user.id;
     res.json({ ok: true });
   });
@@ -140,11 +154,12 @@ function authRouter(store) {
   }
 
   router.post('/auth/logout', (req, res) => {
-    req.session = null;
+    // Устройство остаётся «приглашённым»: после выхода можно сразу выбрать себя в списке.
+    req.session = { invited: invited(req) };
     res.json({ ok: true });
   });
 
   return router;
 }
 
-module.exports = { authRouter, newLoginKey, hashKey, normalizeKey };
+module.exports = { authRouter, PICTURES, cleanPics, hashPics };

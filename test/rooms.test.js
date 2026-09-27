@@ -24,9 +24,12 @@ test('у каждого урока есть шаги с подсказкой и 
   }
 });
 
-test('личный ключ: нормализация и хеш не зависят от регистра, ё и пробелов', () => {
-  const { newLoginKey, hashKey } = require('../server/auth');
-  const key = newLoginKey();
-  assert.match(key, /^[а-яё]+-[а-яё]+-\d{3}$/);
-  assert.strictEqual(hashKey('Ёжик-Кот-123'), hashKey(' ежик кот 123 '));
+test('картиночный пароль: проверка и хеш с солью по пользователю', () => {
+  const { cleanPics, hashPics, PICTURES } = require('../server/auth');
+  assert.strictEqual(PICTURES.length, 12);
+  assert.deepStrictEqual(cleanPics([0, 5, 11]), [0, 5, 11]);
+  assert.strictEqual(cleanPics([0, 5]), null);
+  assert.strictEqual(cleanPics([0, 5, 12]), null);
+  assert.notStrictEqual(hashPics('a', [1, 2, 3]), hashPics('b', [1, 2, 3]));
+  assert.notStrictEqual(hashPics('a', [1, 2, 3]), hashPics('a', [3, 2, 1]));
 });

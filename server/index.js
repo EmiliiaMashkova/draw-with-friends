@@ -5,7 +5,7 @@ const express = require('express');
 const cookieSession = require('cookie-session');
 const { Server } = require('socket.io');
 const { createStore } = require('./store');
-const { authRouter, newLoginKey, hashKey } = require('./auth');
+const { authRouter, cleanPics, hashPics, PICTURES } = require('./auth');
 const { setupRooms, publicUser } = require('./rooms');
 const { LESSONS } = require('./lessons');
 
@@ -49,7 +49,7 @@ async function main() {
   };
 
   app.get('/api/me', requireUser, (req, res) => {
-    res.json({ ...publicUser(req.user), rawAvatar: req.user.avatar || 'google', googlePicture: req.user.googlePicture, needsProfile: !req.user.nickname, hasLoginKey: Boolean(req.user.loginKeyHash) });
+    res.json({ ...publicUser(req.user), rawAvatar: req.user.avatar || 'google', googlePicture: req.user.googlePicture, needsProfile: !req.user.nickname, hasPicPassword: Boolean(req.user.picHash), pictures: PICTURES });
   });
 
   app.put('/api/me', requireUser, async (req, res) => {
@@ -61,15 +61,11 @@ async function main() {
     res.json(publicUser(user));
   });
 
-  // Выдаёт новый личный ключ входа (старый перестаёт работать). Ключ хранится только как хеш.
-  app.post('/api/me/login-key', requireUser, async (req, res) => {
-    for (let i = 0; i < 5; i++) {
-      const key = newLoginKey();
-      if (await store.findUserByKeyHash(hashKey(key))) continue;
-      await store.setLoginKeyHash(req.user.id, hashKey(key));
-      return res.json({ key });
-    }
-    res.status(500).json({ error: 'Не получилось создать ключ, попробуйте ещё раз.' });
+  app.put('/api/me/pic-password', requireUser, async (req, res) => {
+    const pics = cleanPics(req.body.pics);
+    if (!pics) return res.status(400).json({ error: 'Выберите 3 картинки.' });
+    await store.setPicHash(req.user.id, hashPics(req.user.id, pics));
+    res.json({ ok: true });
   });
 
   let rooms;
