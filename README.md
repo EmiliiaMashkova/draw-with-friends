@@ -20,6 +20,7 @@ Node.js 22, Express, Socket.IO, PostgreSQL (или память процесса
 | --- | --- |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | OAuth-клиент Google (тип «Web application»). Redirect URI: `https://<домен>/auth/google/callback` |
 | `INVITE_CODE` | Код приглашения: если задан, на странице входа появляется вход по коду (без Google) |
+| `INVITE_HINT=true` | Показывать код приглашения подсказкой на странице входа |
 | `SESSION_SECRET` | Ключ подписи cookie сессии |
 | `DATABASE_URL` | Строка подключения PostgreSQL; без неё данные живут в памяти |
 | `PUBLIC_URL` | Необязательно: внешний адрес, если прокси не передаёт хост |

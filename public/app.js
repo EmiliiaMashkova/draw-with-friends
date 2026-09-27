@@ -103,7 +103,8 @@ async function renderLogin() {
   if (!cfg.invited) {
     box.append(h('p', {}, t('app.tagline')));
     if (cfg.invite) {
-      const code = h('input', { type: 'text', placeholder: t('login.invitePlaceholder'), autocomplete: 'off' });
+      const code = h('input', { type: 'text', placeholder: t('login.invitePlaceholder'), autocomplete: 'off', value: cfg.inviteHint || '' });
+      if (cfg.inviteHint) box.append(h('div', { class: 'invite-hint' }, h('span', {}, t('login.hint')), h('b', {}, cfg.inviteHint)));
       const msg = h('p', { class: 'error' });
       box.append(h('form', { onsubmit: async (e) => {
         e.preventDefault();

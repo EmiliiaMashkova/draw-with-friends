@@ -12,6 +12,7 @@ const D = {
   'login.failed': ['Prijava nije uspjela, pokušaj ponovo.', "Couldn't sign in, please try again.", 'Не получилось войти, попробуй ещё раз.'],
   'login.inviteAsk': ['Unesi pozivni kod od prijatelja:', 'Enter the invite code from your friends:', 'Введи код приглашения от друзей:'],
   'login.invitePlaceholder': ['Pozivni kod', 'Invite code', 'Код приглашения'],
+  'login.hint': ['🔑 Pozivni kod:', '🔑 Invite code:', '🔑 Код приглашения:'],
   'login.next': ['Dalje', 'Next', 'Дальше'],
   'login.google': ['Prijavi se preko Google-a', 'Sign in with Google', 'Войти через Google'],
   'login.who': ['Ko si ti?', 'Who are you?', 'Кто ты?'],

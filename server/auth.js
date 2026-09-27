@@ -29,10 +29,18 @@ function authRouter(store) {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const devLogin = process.env.DEV_LOGIN === 'true';
   const inviteCode = process.env.INVITE_CODE || '';
+  const inviteHint = process.env.INVITE_HINT === 'true';
   const invited = (req) => Boolean(req.session.invited || req.session.uid);
 
   router.get('/auth/config', (req, res) => {
-    res.json({ google: Boolean(clientId && clientSecret), invite: Boolean(inviteCode), invited: invited(req), dev: devLogin });
+    res.json({
+      google: Boolean(clientId && clientSecret),
+      invite: Boolean(inviteCode),
+      // INVITE_HINT=true показывает код прямо на странице входа (сайт открыт всем, у кого есть ссылка).
+      inviteHint: inviteHint && inviteCode ? inviteCode : null,
+      invited: invited(req),
+      dev: devLogin,
+    });
   });
 
   // Код приглашения общий: он один раз открывает сайт на устройстве (флаг invited в cookie).
