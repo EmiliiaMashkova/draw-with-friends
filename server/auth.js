@@ -1,6 +1,7 @@
 // Вход через Google (OAuth 2.0 / OpenID Connect, authorization code flow) без сторонних библиотек.
 const crypto = require('crypto');
 const express = require('express');
+const { log } = require('./activity');
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -62,10 +63,12 @@ function authRouter(store) {
     const expected = Buffer.from(inviteCode.trim().toLowerCase());
     if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
       failed(req.ip);
+      log('invite-fail');
       return res.status(403).json({ error: 'bad_code' });
     }
     attempts.delete(req.ip);
     req.session.invited = true;
+    log('invite-ok');
     res.json({ ok: true });
   });
 
@@ -81,6 +84,7 @@ function authRouter(store) {
       id: `invite:${crypto.randomUUID()}`, email: null, googleName: null, googlePicture: null,
     });
     req.session.uid = user.id;
+    log('new-user', { id: user.id.slice(-6) });
     res.json({ ok: true });
   });
 
@@ -93,10 +97,12 @@ function authRouter(store) {
     const user = pics && (await store.getUser(userId));
     if (!user || !user.picHash || user.picHash !== hashPics(user.id, pics)) {
       failed(k);
+      log('login-fail', { who: user?.nickname || '?' });
       return res.status(403).json({ error: 'wrong_pics' });
     }
     attempts.delete(k);
     req.session.uid = user.id;
+    log('login', { who: user.nickname });
     res.json({ ok: true });
   });
 

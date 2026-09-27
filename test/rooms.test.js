@@ -33,3 +33,13 @@ test('картиночный пароль: проверка и хеш с сол�
   assert.notStrictEqual(hashPics('a', [1, 2, 3]), hashPics('b', [1, 2, 3]));
   assert.notStrictEqual(hashPics('a', [1, 2, 3]), hashPics('a', [3, 2, 1]));
 });
+
+test('активность: дни по времени Черногории, 7 последних дней', () => {
+  const { dayString, lastDays } = require('../server/activity');
+  // 23:30 UTC 27 сентября: в Подгорице (UTC+2 летом) уже 28-е.
+  assert.strictEqual(dayString(new Date('2026-09-27T23:30:00Z')), '2026-09-28');
+  const days = lastDays(7, new Date('2026-09-27T12:00:00Z'));
+  assert.strictEqual(days.length, 7);
+  assert.strictEqual(days[0], '2026-09-27');
+  assert.strictEqual(days[6], '2026-09-21');
+});

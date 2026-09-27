@@ -8,6 +8,7 @@ const { createStore } = require('./store');
 const { authRouter, cleanPics, hashPics, PICTURES } = require('./auth');
 const { setupRooms, publicUser } = require('./rooms');
 const { LESSONS } = require('./lessons');
+const { createActivity, log } = require('./activity');
 
 const PORT = Number(process.env.PORT || 8080);
 const AVATAR_RE = /^(google|emoji:[^:]{1,8}:#[0-9a-fA-F]{6}|data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+)$/;
@@ -16,6 +17,7 @@ const MAX_AVATAR_LEN = 200_000;
 async function main() {
   const store = createStore();
   await store.init();
+  const activity = createActivity(store);
 
   let secret = process.env.SESSION_SECRET;
   if (!secret) {
@@ -45,6 +47,7 @@ async function main() {
     const user = req.session.uid && (await store.getUser(req.session.uid));
     if (!user) return res.status(401).json({ error: 'unauthorized' });
     req.user = user;
+    activity.touch(user.id);
     next();
   };
 
@@ -74,6 +77,10 @@ async function main() {
     res.json(list.map((c) => ({ ...c, online: rooms.presenceList(c.id) })));
   });
 
+  app.get('/api/stats', requireUser, async (req, res) => {
+    res.json(await activity.stats(rooms.onlineCount()));
+  });
+
   app.get('/api/lessons', requireUser, (req, res) => res.json(LESSONS));
 
   app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -81,7 +88,15 @@ async function main() {
   const server = http.createServer(app);
   const io = new Server(server, { maxHttpBufferSize: 1e6 });
   io.engine.use(session);
-  rooms = setupRooms(io, store);
+  rooms = setupRooms(io, store, activity);
+
+  // Раз в 10 минут короткая сводка в лог: онлайн, за день, за неделю, штрихов с прошлой сводки.
+  setInterval(async () => {
+    try {
+      const st = await activity.stats(rooms.onlineCount());
+      log('stats', { online: st.online, today: st.today, week: st.week, users: st.users, strokes: rooms.takeStrokeCount() });
+    } catch (err) { console.error('stats error', err.message); }
+  }, 10 * 60 * 1000).unref();
 
   server.listen(PORT, () => console.log(`draw-with-friends слушает порт ${PORT}`));
 }

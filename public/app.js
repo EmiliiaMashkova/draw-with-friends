@@ -153,6 +153,25 @@ async function renderLogin() {
   }
 }
 
+let statsTimer = null;
+async function renderStats() {
+  const box = h('div', { class: 'stats' });
+  app.replaceChildren(h('div', { class: 'room-head' }, h('a', { href: '#/' }, t('room.back')), h('h2', {}, t('stats.title'))), box);
+  const load = async () => {
+    if (location.hash !== '#/stats') { clearInterval(statsTimer); return; }
+    const st = await api('/api/stats');
+    const tile = (n, label, cls) => h('div', { class: `stat ${cls}` }, h('b', {}, String(n)), h('span', {}, label));
+    box.replaceChildren(
+      tile(st.online, t('stats.online'), 'online'),
+      tile(st.today, t('stats.today'), ''),
+      tile(st.week, t('stats.week'), ''),
+      tile(st.users, t('stats.users'), ''));
+  };
+  clearInterval(statsTimer);
+  statsTimer = setInterval(load, 15000);
+  await load();
+}
+
 async function renderLobby() {
   const list = await api('/api/canvases');
   const cards = list.map((c) => {
@@ -164,7 +183,9 @@ async function renderLobby() {
       h('p', {}, typeText(c.type)),
       faces);
   });
-  app.replaceChildren(h('h2', {}, t('lobby.title')), h('div', { class: 'grid' }, cards));
+  app.replaceChildren(
+    h('div', { class: 'room-head' }, h('h2', {}, t('lobby.title')), h('a', { href: '#/stats', class: 'stats-link' }, t('stats.link'))),
+    h('div', { class: 'grid' }, cards));
 }
 
 function fillFaces(el, users) {
@@ -411,6 +432,7 @@ async function route() {
   if ((me.needsProfile || needsPics) && hash !== '#/profile') { location.hash = '#/profile'; return; }
   const m = hash.match(/^#\/c\/(\d+)/);
   if (hash === '#/profile') renderProfile();
+  else if (hash === '#/stats') await renderStats();
   else if (m) await renderRoom(Number(m[1]));
   else { ensureSocket(); await renderLobby(); }
 }

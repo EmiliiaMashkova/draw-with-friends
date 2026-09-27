@@ -148,3 +148,9 @@ select.lang { border: 1px solid var(--line); background: var(--panel); border-ra
   background: #fff4dc; color: #6b4a00; border: 2px dashed var(--assisted); font-size: 18px;
 }
 .invite-hint b { font-size: 26px; letter-spacing: 1px; }
+.stats-link { margin-left: auto; font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; }
+.stat { background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; display: flex; flex-direction: column; gap: 4px; }
+.stat b { font-size: 44px; line-height: 1; }
+.stat span { color: var(--muted); }
+.stat.online b { color: var(--free); }

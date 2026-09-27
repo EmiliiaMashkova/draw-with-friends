@@ -1,5 +1,6 @@
 // Логика полотен в реальном времени: присутствие, штрихи, раунды и уроки с помощником.
 const { LESSONS } = require('./lessons');
+const { log } = require('./activity');
 
 const TURN_SECONDS = Number(process.env.TURN_SECONDS || 45);
 const LAPS = 2; // сколько раз каждый игрок рисует за игру
@@ -34,10 +35,12 @@ function cleanStroke(raw) {
   return { tool, color, size, points };
 }
 
-function setupRooms(io, store) {
+function setupRooms(io, store, activity) {
   const presence = new Map(); // canvasId -> Map(socketId -> publicUser)
   const states = new Map(); // canvasId -> игровое состояние (раунды / урок)
   const timers = new Map();
+  const connected = new Map(); // userId -> число открытых вкладок
+  let strokesSinceReport = 0;
 
   const room = (id) => `c:${id}`;
 
@@ -90,6 +93,7 @@ function setupRooms(io, store) {
       }
     }
     st.status = 'finished';
+    log('game-end', { canvas: canvasId, turns: st.order.length });
     st.drawer = null;
     st.turnEndsAt = null;
     broadcastState(canvasId);
@@ -106,6 +110,7 @@ function setupRooms(io, store) {
     st.promptId = Math.floor(Math.random() * PROMPTS.length);
     st.prompt = PROMPTS[st.promptId];
     st.status = 'playing';
+    log('game-start', { canvas: canvasId, players: players.length, prompt: st.prompt });
     await store.clearStrokes(canvasId);
     io.to(room(canvasId)).emit('canvas:cleared');
     nextTurn(canvasId);
@@ -121,6 +126,8 @@ function setupRooms(io, store) {
     }
     const me = publicUser(dbUser);
     let canvas = null;
+    connected.set(me.id, (connected.get(me.id) || 0) + 1);
+    activity?.touch(me.id);
 
     const leave = () => {
       if (!canvas) return;
@@ -168,6 +175,7 @@ function setupRooms(io, store) {
       if (!s) return ack?.({ error: 'invalid' });
       const canvasId = canvas.id;
       const saved = await store.addStroke(canvasId, me.id, s);
+      strokesSinceReport += 1;
       const sid = typeof msg.sid === 'string' ? msg.sid.slice(0, 40) : null;
       socket.to(room(canvasId)).emit('stroke:add', { ...saved, sid });
       ack?.({ id: saved.id });
@@ -185,6 +193,7 @@ function setupRooms(io, store) {
       if (!canvas || canvas.type === 'rounds') return;
       const canvasId = canvas.id;
       await store.clearStrokes(canvasId);
+      log('canvas-clear', { canvas: canvasId, by: me.nickname });
       io.to(room(canvasId)).emit('canvas:cleared', { by: me.nickname });
     });
 
@@ -230,10 +239,18 @@ function setupRooms(io, store) {
       broadcastState(canvas.id);
     });
 
-    socket.on('disconnect', leave);
+    socket.on('disconnect', () => {
+      leave();
+      const n = (connected.get(me.id) || 1) - 1;
+      if (n <= 0) connected.delete(me.id); else connected.set(me.id, n);
+    });
   });
 
-  return { presenceList };
+  return {
+    presenceList,
+    onlineCount: () => connected.size,
+    takeStrokeCount: () => { const n = strokesSinceReport; strokesSinceReport = 0; return n; },
+  };
 }
 
 module.exports = { setupRooms, publicUser, cleanStroke };

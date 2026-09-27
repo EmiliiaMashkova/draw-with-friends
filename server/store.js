@@ -43,6 +43,17 @@ class MemoryStore {
     return u;
   }
   async listCanvases() { return this.canvases.map((c) => ({ ...c })); }
+  async touchActivity(userId, day) {
+    if (!this.activity) this.activity = new Map(); // day -> Set(userId)
+    if (!this.activity.has(day)) this.activity.set(day, new Set());
+    this.activity.get(day).add(userId);
+  }
+  async activityStats(days) {
+    const a = this.activity || new Map();
+    const week = new Set();
+    for (const d of days) for (const u of a.get(d) || []) week.add(u);
+    return { today: (a.get(days[0]) || new Set()).size, week: week.size, users: this.users.size };
+  }
   async getCanvas(id) { return this.canvases.find((c) => c.id === id) || null; }
   async listStrokes(canvasId) { return (this.strokes.get(canvasId) || []).map((s) => ({ ...s })); }
   async addStroke(canvasId, userId, data) {
@@ -92,6 +103,11 @@ class PgStore {
       );
       CREATE INDEX IF NOT EXISTS strokes_canvas_idx ON strokes (canvas_id, id);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS pic_hash TEXT;
+      CREATE TABLE IF NOT EXISTS activity (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        day DATE NOT NULL,
+        PRIMARY KEY (user_id, day)
+      );
     `);
     const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM canvases');
     if (rows[0].n === 0) {
@@ -134,6 +150,19 @@ class PgStore {
       [id, nickname, avatar],
     );
     return PgStore.rowToUser(rows[0]) || null;
+  }
+  async touchActivity(userId, day) {
+    await this.pool.query('INSERT INTO activity (user_id, day) VALUES ($1, $2) ON CONFLICT DO NOTHING', [userId, day]);
+  }
+  async activityStats(days) {
+    const { rows } = await this.pool.query(
+      `SELECT count(DISTINCT user_id) FILTER (WHERE day = $1)::int AS today,
+              count(DISTINCT user_id) FILTER (WHERE day = ANY($2::date[]))::int AS week,
+              (SELECT count(*)::int FROM users) AS users
+         FROM activity WHERE day = ANY($2::date[])`,
+      [days[0], days],
+    );
+    return rows[0];
   }
   async listCanvases() {
     const { rows } = await this.pool.query('SELECT id, name, type FROM canvases ORDER BY id');
